@@ -1,0 +1,41 @@
+[project]
+name = "bezier-rfm"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = "==3.12.*"
+dependencies = [
+    "flax>=0.12.10",
+    "ipykernel>=7.3.0",
+    "jax[cuda13-local]>=0.11.2",
+    "matplotlib>=3.11.2",
+    "optax>=0.2.8",
+    "scipy>=1.18.1",
+    "h5py",
+    "mink==0.0.10",
+    "mujoco==3.2.3",
+    "numba==0.68.1",
+    "numpy==2.5.3",
+    "robomimic",
+    "robosuite",
+    "torch",
+    "torchvision",
+]
+
+[dependency-groups]
+dev = [
+    "ipykernel>=7.3.0",
+    "jupyter>=1.1.1",
+    "nbconvert>=7.17.1",
+]
+
+[tool.uv.sources]
+robosuite = { git = "https://github.com/ARISE-Initiative/robosuite.git", rev = "51cc01785bab80ffeed20da15e67d7dd4140e76a" }
+robomimic = { git = "https://github.com/ARISE-Initiative/robomimic.git", rev = "7c66e7a41b5d9dcc905b1a68346bfee1b49b79c9" }
+torch = { index = "pytorch-cpu" }
+torchvision = { index = "pytorch-cpu" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
