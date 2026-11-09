@@ -9,8 +9,8 @@ import h5py
 import numpy as np
 from scipy.spatial.transform import Rotation
 
-from convert_lift_abs import demo_keys, make_env
-from inspect_lift_demo import arm_controller, require, table
+from bezier_rfm.datasets.robomimic import arm_controller, demo_keys, make_env, require
+from inspect_lift_demo import table
 
 POS_TOL = 1e-9
 ROT_TOL = 1e-5

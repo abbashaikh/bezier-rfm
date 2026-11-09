@@ -10,11 +10,9 @@ from pathlib import Path
 
 import h5py
 import numpy as np
-import robomimic.utils.env_utils as EnvUtils
-import robomimic.utils.obs_utils as ObsUtils
 from scipy.spatial.transform import Rotation
 
-from inspect_lift_demo import arm_controller, require
+from bezier_rfm.datasets.robomimic import arm_controller, demo_keys, make_env, require
 
 ACTION_CONVENTION = {
     "type": "absolute",
@@ -23,18 +21,6 @@ ACTION_CONVENTION = {
     "gripper": "original gripper command, actions[:, 6]",
     "goal_source": "OSC_POSE controller goal_pos and goal_ori after set_goal on the stored delta action",
 }
-
-
-def demo_keys(data):
-    """Return demonstration names in numeric order.
-
-    Args:
-        data (h5py.Group): The HDF5 "data" group.
-
-    Returns:
-        list: Names such as "demo_0".
-    """
-    return sorted(data.keys(), key=lambda key: int(key.split("_")[1]))
 
 
 def absolute_env_args(env_args):
@@ -54,21 +40,6 @@ def absolute_env_args(env_args):
     arm["input_type"] = "absolute"
     arm["input_ref_frame"] = "world"
     return result
-
-
-def make_env(env_args, obs_keys):
-    """Create an environment from stored metadata.
-
-    Args:
-        env_args (dict): Environment metadata.
-        obs_keys (list): Low-dimensional observation names.
-
-    Returns:
-        EnvRobosuite: The environment wrapper.
-    """
-    # EnvRobosuite.get_observation reads this table, so it must exist first.
-    ObsUtils.initialize_obs_utils_with_obs_specs({"obs": {"low_dim": list(obs_keys), "rgb": []}})
-    return EnvUtils.create_env_from_metadata(env_args, render=False, render_offscreen=False, use_image_obs=False)
 
 
 def convert_demo(env, demo):

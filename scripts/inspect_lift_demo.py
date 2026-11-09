@@ -12,22 +12,10 @@ import h5py
 import numpy as np
 from scipy.spatial.transform import Rotation
 
+from bezier_rfm.datasets.robomimic import arm_controller, require
+
 PACKAGES = ["numpy", "numba", "mujoco", "mink", "scipy", "h5py", "torch", "torchvision", "robosuite", "robomimic"]
 QUAT_NORM_TOL = 1e-5
-
-
-def require(condition, message):
-    """Stop the script when a hard check fails.
-
-    Args:
-        condition (bool): Result of the check.
-        message (str): Description of the failed check.
-
-    Returns:
-        None: Nothing.
-    """
-    if not condition:
-        raise SystemExit(f"HARD FAILURE: {message}")
 
 
 def collect_versions(dataset_path):
@@ -127,19 +115,6 @@ def make_env(demo):
     # EnvRobosuite.get_observation reads this table, so it must exist first.
     ObsUtils.initialize_obs_utils_with_obs_specs({"obs": {"low_dim": list(demo["obs"]), "rgb": []}})
     return EnvUtils.create_env_from_metadata(demo["env_args"], render=False, render_offscreen=False, use_image_obs=False)
-
-
-def arm_controller(env):
-    """Return the arm controller of the single robot.
-
-    Args:
-        env (EnvRobosuite): The environment wrapper.
-
-    Returns:
-        object: The OSC part controller.
-    """
-    robot = env.env.robots[0]
-    return robot.part_controllers[robot.arms[0]]
 
 
 def live_settings(env):
