@@ -9,6 +9,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 from bezier_rfm.datasets.robomimic import arm_controller, demo_keys, load_demo_model, make_env, read_result, require
+from bezier_rfm.eval.lift_diagnostics import PHASES, phase_labels
 from experiment_a_one_step import pose_errors
 from inspect_lift_demo import table
 
@@ -16,7 +17,6 @@ EPISODES = ["delta_stale", "delta_refreshed", "absolute_stale", "absolute_refres
 STARTS = ["stale", "refreshed"]
 PAIRS = ["recording_vs_delta", "recording_vs_absolute", "delta_vs_absolute"]
 ERRORS = ["eef_pos_m", "eef_rot_rad", "cube_pos_m"]
-PHASES = ["first", "approach", "grasp", "lift", "final"]
 GOAL_TOL = 1e-8
 CUBE_POS = slice(10, 13)
 FINGER_Q = slice(8, 10)
@@ -166,32 +166,6 @@ def goal_gaps(goals, stored):
     return np.array([pose_errors(goals["pos"][t], goals["rot"][t], stored[t, :3], stored_rot[t]) for t in range(len(stored))])
 
 
-def phase_labels(recording, n):
-    """Label each action by the task phase of the recording.
-
-    Args:
-        recording (dict): Stacked recorded frames, length n.
-        n (int): Number of actions.
-
-    Returns:
-        np.ndarray: One entry of PHASES per action, shape (n,).
-    """
-    contact = int(np.argmax(recording["contact"])) if recording["contact"].any() else n
-    lifted = int(np.argmax(recording["success"])) if recording["success"].any() else n
-    labels = []
-    for t in range(n):
-        # Action t is compared with recorded state t + 1.
-        if t == 0:
-            labels.append("first")
-        elif t == n - 1:
-            labels.append("final")
-        elif t + 1 < contact:
-            labels.append("approach")
-        elif t + 1 < lifted:
-            labels.append("grasp")
-        else:
-            labels.append("lift")
-    return np.array(labels)
 
 
 def run_demo(envs, source_demo, abs_demo, video):
