@@ -147,7 +147,10 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "flax" },
+    { name = "glfw" },
     { name = "h5py" },
+    { name = "imageio" },
+    { name = "imageio-ffmpeg" },
     { name = "ipykernel" },
     { name = "jax", extra = ["cuda13-local"] },
     { name = "matplotlib" },
@@ -155,6 +158,7 @@ dependencies = [
     { name = "mujoco" },
     { name = "numba" },
     { name = "numpy" },
+    { name = "opencv-python" },
     { name = "optax" },
     { name = "robomimic" },
     { name = "robosuite" },
@@ -175,7 +179,10 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "flax", specifier = ">=0.12.10" },
+    { name = "glfw", specifier = ">=2.11.0" },
     { name = "h5py" },
+    { name = "imageio", specifier = ">=2.38.1" },
+    { name = "imageio-ffmpeg", specifier = ">=0.8.1" },
     { name = "ipykernel", specifier = ">=7.3.0" },
     { name = "jax", extras = ["cuda13-local"], specifier = ">=0.11.2" },
     { name = "matplotlib", specifier = ">=3.11.2" },
@@ -183,6 +190,7 @@ requires-dist = [
     { name = "mujoco", specifier = "==3.2.3" },
     { name = "numba", specifier = "==0.68.1" },
     { name = "numpy", specifier = "==2.5.3" },
+    { name = "opencv-python", specifier = ">=5.0.0" },
     { name = "optax", specifier = ">=0.2.8" },
     { name = "robomimic", git = "https://github.com/ARISE-Initiative/robomimic.git?rev=7c66e7a41b5d9dcc905b1a68346bfee1b49b79c9" },
     { name = "robosuite", git = "https://github.com/ARISE-Initiative/robosuite.git?rev=51cc01785bab80ffeed20da15e67d7dd4140e76a" },

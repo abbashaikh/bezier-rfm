@@ -1,4 +1,4 @@
-"""Convert Lift delta actions into absolute grip-site goals in a new HDF5 file."""
+"""Convert RoboMimic delta actions into absolute grip-site goals in a new HDF5 file."""
 
 import argparse
 import copy
@@ -105,8 +105,10 @@ def main():
     Returns:
         None: Nothing.
     """
-    root = Path("data/robomimic/datasets/lift/ph")
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--task", choices=["lift", "tool_hang"], default="lift")
+    task = parser.parse_known_args()[0].task
+    root = Path(f"data/robomimic/datasets/{task}/ph")
     parser.add_argument("--source", type=Path, default=root / "low_dim_v15.hdf5")
     parser.add_argument("--output", type=Path, default=root / "low_dim_abs.hdf5")
     args = parser.parse_args()

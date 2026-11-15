@@ -1,4 +1,4 @@
-"""Capture per-step diagnostic traces of Lift demonstrations and command replays."""
+"""Capture per-step diagnostic traces of Lift and Tool Hang demonstrations and command replays."""
 
 import json
 
@@ -37,11 +37,46 @@ ACTION_FIELDS = {
 }
 BOOL_FIELDS = ("contact", "success", "valid")
 FINGER_Q = slice(8, 10)
+# Tool Hang records one pose per object instead of the Lift cube fields.
+TOOL_HANG_OBJECTS = ("stand", "frame", "tool")
 PHASES = ["first", "approach", "grasp", "lift", "final"]
 
 
+def is_tool_hang(env):
+    """Return whether the environment is Tool Hang.
+
+    Args:
+        env (EnvRobosuite): The environment wrapper.
+
+    Returns:
+        bool: True for Tool Hang, False for Lift.
+    """
+    return type(env.env).__name__ == "ToolHang"
+
+
+def state_fields(env):
+    """Return the per-state fields of the environment's task.
+
+    Args:
+        env (EnvRobosuite): The environment wrapper.
+
+    Returns:
+        dict: Field name -> shape of one row.
+    """
+    if not is_tool_hang(env):
+        return STATE_FIELDS
+    fields = {k: v for k, v in STATE_FIELDS.items() if not k.startswith(("cube", "gripper_to_cube"))}
+    model = env.env.sim.model
+    # A flattened MuJoCo state is [time, qpos, qvel].
+    fields["state"] = (1 + model.nq + model.nv,)
+    for name in TOOL_HANG_OBJECTS:
+        fields[f"{name}_pos"] = (3,)
+        fields[f"{name}_rot"] = (3, 3)
+    return fields
+
+
 def read_state(env):
-    """Read the grip-site pose and velocity, fingers, cube, contact, and success.
+    """Read the grip-site pose and velocity, fingers, objects, contact, and success.
 
     Args:
         env (EnvRobosuite): The environment wrapper.
@@ -58,11 +93,9 @@ def read_state(env):
     velocity = np.zeros(6)
     # World-frame [angular, linear] velocity of the grip site.
     mujoco.mj_objectVelocity(model, data, mujoco.mjtObj.mjOBJ_SITE, site, velocity, 0)
-    cube = base.cube_body_id
     state = sim.get_state().flatten().copy()
     pos = data.site_xpos[site].copy()
-    cube_pos = data.xpos[cube].copy()
-    return {
+    row = {
         "sim_time": float(data.time),
         "ach_pos": pos,
         "ach_rot": data.site_xmat[site].reshape(3, 3).copy(),
@@ -70,28 +103,41 @@ def read_state(env):
         "ach_angvel": velocity[:3].copy(),
         "state": state,
         "finger_q": state[FINGER_Q].copy(),
+        "success": bool(base._check_success()),
+    }
+    gripper = base.robots[0].gripper["right"]
+    if is_tool_hang(env):
+        for name in TOOL_HANG_OBJECTS:
+            body = base.obj_body_id[name]
+            row[f"{name}_pos"] = data.xpos[body].copy()
+            row[f"{name}_rot"] = data.xmat[body].reshape(3, 3).copy()
+        row["contact"] = any(base.check_contact(gripper, getattr(base, name)) for name in TOOL_HANG_OBJECTS)
+        return row
+    cube_pos = data.xpos[base.cube_body_id].copy()
+    return {
+        **row,
         "cube_pos": cube_pos,
-        "cube_rot": data.xmat[cube].reshape(3, 3).copy(),
+        "cube_rot": data.xmat[base.cube_body_id].reshape(3, 3).copy(),
         "gripper_to_cube": float(np.linalg.norm(pos - cube_pos)),
         # Lift counts the cube as lifted when its centre is 0.04 m above the table top.
         "cube_height": float(cube_pos[2] - base.model.mujoco_arena.table_offset[2]),
-        "contact": bool(base.check_contact(base.robots[0].gripper["right"], base.cube)),
-        "success": bool(base._check_success()),
+        "contact": bool(base.check_contact(gripper, base.cube)),
     }
 
 
-def empty_trace(n):
+def empty_trace(n, fields=STATE_FIELDS):
     """Create a trace for n actions, filled with NaN and False.
 
     Args:
         n (int): Number of actions.
+        fields (dict): Per-state fields, name -> shape of one row.
 
     Returns:
         dict: Arrays with n + 1 state rows and n action rows.
     """
     trace = {}
-    for fields, rows in ((STATE_FIELDS, n + 1), (ACTION_FIELDS, n)):
-        for name, shape in fields.items():
+    for table, rows in ((fields, n + 1), (ACTION_FIELDS, n)):
+        for name, shape in table.items():
             trace[name] = np.zeros((rows, *shape), bool) if name in BOOL_FIELDS else np.full((rows, *shape), np.nan)
     trace["valid"] = np.zeros(n + 1, bool)
     trace["t_start"] = CONTROL_DT * np.arange(n)
@@ -143,9 +189,9 @@ def record_trace(env, demo, actions):
         dict: Trace with N valid states. State N does not exist and stays invalid.
     """
     states = demo["states"][:]
-    trace = empty_trace(len(actions))
-    set_commands(trace, actions)
     load_demo_model(env, demo)
+    trace = empty_trace(len(actions), state_fields(env))
+    set_commands(trace, actions)
     for k, state in enumerate(states):
         env.reset_to({"states": state})
         set_state_row(trace, k, read_state(env))
@@ -164,9 +210,9 @@ def evaluate_commands(env, demo, actions, start="refreshed"):
     Returns:
         dict: Trace with N + 1 valid states and the controller goal of every action.
     """
-    trace = empty_trace(len(actions))
-    set_commands(trace, actions)
     load_demo_model(env, demo)
+    trace = empty_trace(len(actions), state_fields(env))
+    set_commands(trace, actions)
     if start == "refreshed":
         # After a model load, new_update stays False, so the first step would use a pose from before reset_to.
         arm_controller(env).new_update = True
@@ -340,3 +386,51 @@ def read_trace(group):
         tuple: Trace arrays (dict) and metadata (dict).
     """
     return {name: group[name][:] for name in group}, dict(group.attrs)
+
+
+# Pass-rule limits of lift_diagnostics_baseline.ipynb, section 4.6. The gripper limits are proposals, not measurements.
+FIDELITY_TOL = 1e-9
+GRIPPER_POS_LIMIT = 3e-3
+GRIPPER_ROT_LIMIT = np.radians(1.0)
+
+
+def pass_rule(trace, reference):
+    """Evaluate a candidate replay against the reference replay of the same demonstration (section 4.6).
+
+    Args:
+        trace (dict): Candidate replay trace.
+        reference (dict): Reference replay trace, usually replay_q0start.
+
+    Returns:
+        dict: Per-level values (m, rad), the gate result, and the level 2 and 3 flags.
+    """
+    n = len(trace["cmd_pos"])
+    fidelity = command_fidelity(trace)
+    achieved = achieved_errors(trace, reference)
+    free = np.isin(phase_labels(reference, n), ["first", "approach"])
+    cmd_pos = np.linalg.norm(trace["cmd_pos"] - reference["cmd_pos"], axis=1)
+    cmd_rot = geodesic(trace["cmd_rot"], reference["cmd_rot"])
+    close = lambda g: int(np.flatnonzero(np.diff(g))[0]) + 1
+    out = {
+        "fidelity_pos_m": float(fidelity[:, 0].max()),
+        "fidelity_rot_rad": float(fidelity[:, 1].max()),
+        "cmd_pos_max_m": float(cmd_pos.max()),
+        "cmd_rot_max_rad": float(cmd_rot.max()),
+        "free_pos_max_m": float(np.nanmax(achieved[free, 0])),
+        "free_rot_max_rad": float(np.nanmax(achieved[free, 1])),
+        "contact_pos_max_m": float(np.nanmax(achieved[~free, 0])),
+        "contact_rot_max_rad": float(np.nanmax(achieved[~free, 1])),
+        "cube_pos_max_m": float(np.nanmax(achieved[:, 2])),
+        "cube_rot_max_rad": float(np.nanmax(achieved[:, 3])),
+        "close_step": close(trace["gripper_cmd"]),
+        "ref_close_step": close(reference["gripper_cmd"]),
+        "success": bool(trace["success"][-1]),
+        "ref_success": bool(reference["success"][-1]),
+        "height_diff_m": float(trace["cube_height"][-1] - reference["cube_height"][-1]),
+    }
+    fidelity_ok = out["fidelity_pos_m"] <= FIDELITY_TOL and out["fidelity_rot_rad"] <= FIDELITY_TOL
+    # Option A: the gate is fidelity, the close step, and the lift outcome; levels 2 and 3 are flags to inspect.
+    out["gate"] = fidelity_ok and out["close_step"] == out["ref_close_step"] and (out["success"] or not out["ref_success"])
+    out["level2_ok"] = bool(out["free_pos_max_m"] <= GRIPPER_POS_LIMIT and out["free_rot_max_rad"] <= GRIPPER_ROT_LIMIT)
+    out["level3_ok"] = bool(out["contact_pos_max_m"] <= GRIPPER_POS_LIMIT and out["contact_rot_max_rad"] <= GRIPPER_ROT_LIMIT)
+    return out

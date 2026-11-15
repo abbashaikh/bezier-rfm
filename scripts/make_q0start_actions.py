@@ -1,4 +1,4 @@
-"""Copy the absolute-action Lift dataset with action 0 set to the start grip-site pose."""
+"""Copy an absolute-action Lift or Tool Hang dataset with action 0 set to the start grip-site pose."""
 
 import argparse
 import hashlib
@@ -48,8 +48,9 @@ def main():
     Returns:
         None: Nothing.
     """
-    root = Path("data/robomimic/datasets/lift/ph")
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--task", choices=["lift", "tool_hang"], default="lift")
+    root = Path(f"data/robomimic/datasets/{parser.parse_known_args()[0].task}/ph")
     parser.add_argument("--absolute", type=Path, default=root / "low_dim_abs.hdf5")
     parser.add_argument("--output", type=Path, default=root / "low_dim_abs_q0start.hdf5")
     args = parser.parse_args()

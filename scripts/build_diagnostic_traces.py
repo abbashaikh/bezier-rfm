@@ -1,4 +1,4 @@
-"""Build diagnostic traces of recorded Lift demonstrations and their absolute-action replays."""
+"""Build diagnostic traces of recorded Lift or Tool Hang demonstrations and their absolute-action replays."""
 
 import argparse
 import hashlib
@@ -43,7 +43,7 @@ def common_attrs(args, env, abs_data):
     """
     base = env.env
     controller = arm_controller(env)
-    return {
+    attrs = {
         "source_file": str(args.source),
         "source_sha256": sha256(args.source),
         "absolute_file": str(args.absolute),
@@ -54,11 +54,14 @@ def common_attrs(args, env, abs_data):
         "model_timestep": float(base.model_timestep),
         "substeps": int(round(base.control_timestep / base.model_timestep)),
         "controller": {"input_type": controller.input_type, "input_ref_frame": controller.input_ref_frame, "ref_name": controller.ref_name},
-        "versions": json.loads(args.versions.read_text()),
         "alignment": ALIGNMENT,
         "t0_note": T0_NOTE,
         "termination": TERMINATION,
     }
+    # Only Lift has a Step 1 versions file.
+    if args.versions is not None:
+        attrs["versions"] = json.loads(args.versions.read_text())
+    return attrs
 
 
 def main():
@@ -70,14 +73,17 @@ def main():
     Returns:
         None: Nothing.
     """
-    root = Path("data/robomimic/datasets/lift/ph")
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--task", choices=["lift", "tool_hang"], default="lift")
+    task = parser.parse_known_args()[0].task
+    root = Path(f"data/robomimic/datasets/{task}/ph")
+    lift = task == "lift"
     parser.add_argument("--source", type=Path, default=root / "low_dim_v15.hdf5")
     parser.add_argument("--absolute", type=Path, default=root / "low_dim_abs.hdf5")
-    parser.add_argument("--versions", type=Path, default=Path("docs/sim-and-dataset-inspection/env_versions.json"))
+    parser.add_argument("--versions", type=Path, default=Path("docs/sim-and-dataset-inspection/env_versions.json") if lift else None)
     parser.add_argument("--demos", nargs="+", default=["demo_0"], help='Demonstration names, or "all"')
     parser.add_argument("--start", default="refreshed", choices=["refreshed", "stale"])
-    parser.add_argument("--out", type=Path, default=Path("docs/diagnostics/baseline_traces.hdf5"))
+    parser.add_argument("--out", type=Path, default=Path("docs/diagnostics/baseline_traces.hdf5" if lift else f"docs/{task}/diagnostics/traces.hdf5"))
     args = parser.parse_args()
     args.out.parent.mkdir(parents=True, exist_ok=True)
 

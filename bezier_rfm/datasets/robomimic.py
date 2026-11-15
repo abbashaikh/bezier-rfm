@@ -1,4 +1,4 @@
-"""Load RoboMimic Lift demonstrations into robosuite and read the simulator."""
+"""Load RoboMimic demonstrations into robosuite and read the simulator."""
 
 import robomimic.utils.env_utils as EnvUtils
 import robomimic.utils.obs_utils as ObsUtils
@@ -69,7 +69,9 @@ def load_demo_model(env, demo):
         None: Nothing.
     """
     env.reset_to({"states": demo["states"][0], "model": demo.attrs["model_file"]})
-    require(env.env.sim.model.nq == 16 and env.env.sim.model.nv == 15, "unexpected Lift state layout")
+    model = env.env.sim.model
+    # A flattened MuJoCo state is [time, qpos, qvel].
+    require(len(demo["states"][0]) == 1 + model.nq + model.nv, "stored state does not match the model layout")
 
 
 def read_result(env):
@@ -79,7 +81,7 @@ def read_result(env):
         env (EnvRobosuite): The environment wrapper.
 
     Returns:
-        dict: State, shape (32,), grip-site position, shape (3,), and rotation matrix, shape (3, 3).
+        dict: State, shape (1 + nq + nv,), grip-site position, shape (3,), and rotation matrix, shape (3, 3).
     """
     sim = env.env.sim
     # After mj_step, site poses describe the qpos before the last integration.

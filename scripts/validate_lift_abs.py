@@ -1,4 +1,4 @@
-"""Validate the converted Lift dataset against the original and write a report."""
+"""Validate a converted RoboMimic dataset against the original and write a report."""
 
 import argparse
 import hashlib
@@ -17,6 +17,10 @@ ROT_TOL = 1e-5
 POS_SCALE = 0.05
 ROT_SCALE = 0.5
 JUMP_THRESHOLD = 1.0
+# Number of demonstrations, demo_0 action shape, and title name of each task.
+TASKS = {"lift": (200, (59, 7), "Lift"), "tool_hang": (200, (681, 7), "Tool Hang")}
+# Hugging Face ETag of the official Tool Hang file; Lift uses the Step 1 versions file.
+TOOL_HANG_SHA256 = "c5cb01b119a109a3d4842ca515906e86f1f35a8ee1a333d22b3503c1a513a8f4"
 
 
 def rotation_error(goal_a, goal_b):
@@ -159,7 +163,7 @@ def check_controllers(source, output):
     }
 
 
-def write_report(path, summary, goals, controllers, first_rows, delta_rows, env_args, convention):
+def write_report(path, summary, goals, controllers, first_rows, delta_rows, env_args, convention, title):
     """Write the Markdown conversion report.
 
     Args:
@@ -171,6 +175,7 @@ def write_report(path, summary, goals, controllers, first_rows, delta_rows, env_
         delta_rows (np.ndarray): First delta actions of demo_0, shape (M, 7).
         env_args (dict): Metadata stored in the converted file.
         convention (dict): The action_convention attribute.
+        title (str): Task name in the report title.
 
     Returns:
         None: Nothing.
@@ -179,7 +184,7 @@ def write_report(path, summary, goals, controllers, first_rows, delta_rows, env_
     fmt = lambda row: [f"{value:.4f}" for value in row]
     arm = env_args["env_kwargs"]["controller_configs"]["body_parts"]["right"]
     sections = [
-        "# Step 2 conversion report: Lift PH low-dim\n\n"
+        f"# Step 2 conversion report: {title} PH low-dim\n\n"
         "All hard checks passed. This report covers structure and representation. It does not claim that absolute actions reproduce the original motion, which Step 3 tests.",
         "## Dataset integrity\n\n" + table(["Check", "Result"], list(summary.items())),
         "## Action convention\n\n" + table(["Field", "Value"], list(convention.items())),
@@ -221,24 +226,28 @@ def main():
     Returns:
         None: Nothing.
     """
-    root = Path("data/robomimic/datasets/lift/ph")
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--task", choices=list(TASKS), default="lift")
+    task = parser.parse_known_args()[0].task
+    root = Path(f"data/robomimic/datasets/{task}/ph")
+    n_demos, demo0_shape, title = TASKS[task]
     parser.add_argument("--source", type=Path, default=root / "low_dim_v15.hdf5")
     parser.add_argument("--output", type=Path, default=root / "low_dim_abs.hdf5")
     parser.add_argument("--versions", type=Path, default=Path("docs/sim-and-dataset-inspection/env_versions.json"))
-    parser.add_argument("--out-dir", type=Path, default=Path("docs/delta-to-absolute-conversion"))
+    out_dir = "docs/delta-to-absolute-conversion" if task == "lift" else f"docs/{task}/delta-to-absolute-conversion"
+    parser.add_argument("--out-dir", type=Path, default=Path(out_dir))
     args = parser.parse_args()
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
     source_sha256 = hashlib.sha256(args.source.read_bytes()).hexdigest()
-    step1_sha256 = json.loads(args.versions.read_text())["dataset"]["sha256"]
+    step1_sha256 = json.loads(args.versions.read_text())["dataset"]["sha256"] if task == "lift" else TOOL_HANG_SHA256
     require(source_sha256 == step1_sha256, "the original dataset changed since Step 1")
     require(args.output.stat().st_mode & 0o222 == 0, "the output file is writable")
 
     with h5py.File(args.source, "r") as source_file, h5py.File(args.output, "r") as output_file:
         source, output = source_file["data"], output_file["data"]
-        require(len(output) == 200, f"expected 200 demonstrations, found {len(output)}")
-        require(output["demo_0/actions"].shape == (59, 7), "demo_0/actions is not (59, 7)")
+        require(len(output) == n_demos, f"expected {n_demos} demonstrations, found {len(output)}")
+        require(output["demo_0/actions"].shape == demo0_shape, f"demo_0/actions is not {demo0_shape}")
         convention = json.loads(output.attrs["action_convention"])
         require(convention["source_sha256"] == source_sha256, "action_convention names a different source")
         compared = check_preserved(source, output)
@@ -263,6 +272,7 @@ def main():
             source["demo_0/actions"][:3],
             json.loads(output.attrs["env_args"]),
             convention,
+            title,
         )
     print(f"All hard checks passed. Report: {args.out_dir / 'report.md'}")
 
