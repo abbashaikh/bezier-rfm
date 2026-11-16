@@ -10,7 +10,6 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 from bezier_rfm.datasets.robomimic import arm_controller, demo_keys, make_env, require
-from inspect_lift_demo import table
 
 POS_TOL = 1e-9
 ROT_TOL = 1e-5
@@ -19,8 +18,24 @@ ROT_SCALE = 0.5
 JUMP_THRESHOLD = 1.0
 # Number of demonstrations, demo_0 action shape, and title name of each task.
 TASKS = {"lift": (200, (59, 7), "Lift"), "tool_hang": (200, (681, 7), "Tool Hang")}
-# Hugging Face ETag of the official Tool Hang file; Lift uses the Step 1 versions file.
+# SHA-256 of the official source files (Lift: recorded in Step 1; Tool Hang: Hugging Face ETag).
+LIFT_SHA256 = "2067777cb8b532e9263dd09fd6448c41cc31224bb27be4a3b734010ae13eb540"
 TOOL_HANG_SHA256 = "c5cb01b119a109a3d4842ca515906e86f1f35a8ee1a333d22b3503c1a513a8f4"
+
+
+def table(headers, rows):
+    """Format rows as a Markdown table.
+
+    Args:
+        headers (list): Column names.
+        rows (list): Rows of cell values.
+
+    Returns:
+        str: Markdown table text.
+    """
+    lines = ["| " + " | ".join(headers) + " |", "|" + " --- |" * len(headers)]
+    lines += ["| " + " | ".join(str(cell) for cell in row) + " |" for row in rows]
+    return "\n".join(lines)
 
 
 def rotation_error(goal_a, goal_b):
@@ -233,14 +248,12 @@ def main():
     n_demos, demo0_shape, title = TASKS[task]
     parser.add_argument("--source", type=Path, default=root / "low_dim_v15.hdf5")
     parser.add_argument("--output", type=Path, default=root / "low_dim_abs.hdf5")
-    parser.add_argument("--versions", type=Path, default=Path("docs/sim-and-dataset-inspection/env_versions.json"))
-    out_dir = "docs/delta-to-absolute-conversion" if task == "lift" else f"docs/{task}/delta-to-absolute-conversion"
-    parser.add_argument("--out-dir", type=Path, default=Path(out_dir))
+    parser.add_argument("--out-dir", type=Path, default=Path(f"docs/{task}/delta-to-absolute-conversion"))
     args = parser.parse_args()
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
     source_sha256 = hashlib.sha256(args.source.read_bytes()).hexdigest()
-    step1_sha256 = json.loads(args.versions.read_text())["dataset"]["sha256"] if task == "lift" else TOOL_HANG_SHA256
+    step1_sha256 = LIFT_SHA256 if task == "lift" else TOOL_HANG_SHA256
     require(source_sha256 == step1_sha256, "the original dataset changed since Step 1")
     require(args.output.stat().st_mode & 0o222 == 0, "the output file is writable")
 

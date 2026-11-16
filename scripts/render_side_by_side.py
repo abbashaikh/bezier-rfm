@@ -80,7 +80,7 @@ def main():
     parser.add_argument("--source", type=Path, default=root / "low_dim_v15.hdf5")
     parser.add_argument("--reference", type=Path, default=root / "low_dim_abs_q0start.hdf5")
     parser.add_argument("--candidates", type=Path, nargs="+", default=[root / "bezier_k5_2.hdf5"])
-    parser.add_argument("--out-dir", type=Path, default=Path("docs/bezier-fit/videos" if task == "lift" else f"docs/{task}/bezier-fit/videos"))
+    parser.add_argument("--out-dir", type=Path, default=Path(f"docs/{task}/bezier-fit/videos"))
     parser.add_argument("--camera", default="frontview")
     parser.add_argument("--hold", type=int, default=0 if task == "lift" else 60, help="Extra steps with the last action until success")
     args = parser.parse_args()
