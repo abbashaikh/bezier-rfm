@@ -27,6 +27,32 @@ def clock_h(w, c, h_min=0.15):
     return np.diff(np.concatenate([[0.0], tau, [t[-1]]]))
 
 
+def grid_tau(w, c, offset, h_min=0.15):
+    """Return the knot times of one shifted tick grid of the segment clock, ending at the last command.
+
+    Args:
+        w (np.ndarray): Weight per action, shape (N,).
+        c (float): Global clock constant.
+        offset (float): Grid offset in ticks, in [0, 1).
+        h_min (float): Shortest segment, s.
+
+    Returns:
+        np.ndarray: Knot times tau (s), shape (K + 1,); tau[0] > 0 for offset > 0, tau[-1] = last command time.
+    """
+    t = CONTROL_DT * np.arange(len(w))
+    rate = np.minimum(w, c / h_min) / c
+    s = np.concatenate([[0.0], np.cumsum(0.5 * (rate[1:] + rate[:-1]) * CONTROL_DT)])
+    # Same rescale as clock_h: s(T) = K, so the ticks of all grids interleave on one clock.
+    k = max(1, int(round(s[-1])))
+    s = s * k / s[-1]
+    # The part before the first tick is dropped; the last knot is always the last command.
+    tau = np.interp(np.arange(offset, k), s, t)
+    # A final partial interval (offset > 0) shorter than h_min is merged into the segment before it.
+    if offset > 0 and t[-1] - tau[-1] < h_min and len(tau) > 1:
+        tau = tau[:-1]
+    return np.concatenate([tau, [t[-1]]])
+
+
 def euclidean_proxy(actions):
     """Return [p, 2q] with a sign-continuous unit quaternion, so that 2|dq| is about the rotation angle.
 

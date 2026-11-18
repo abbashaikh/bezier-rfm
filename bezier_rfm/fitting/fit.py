@@ -144,7 +144,7 @@ def fit(c0, h, t, p, r, n, max_charts=20, rel_tol=1e-12, trf=None):
     return c, {"cost": last["cost"], "status": last["status"], "active": last["active"], "charts": len(history) - 1, "history": history}
 
 
-def initialize(p, r, events, h, ks):
+def initialize(p, r, events, h, ks, t0=0.0):
     """Build the initial controls from one demonstration's commands (plan section 2).
 
     Args:
@@ -153,6 +153,7 @@ def initialize(p, r, events, h, ks):
         events (list): Action indices of the event knots, length n - 1 (empty for one phase).
         h (np.ndarray): Segment durations in s, shape (K,); each phase must sum to its duration.
         ks (tuple): Number of segments K_i per phase, length n.
+        t0 (float): Time of knot 0, s; the knots end at the last command.
 
     Returns:
         Controls: Initial controls (NumPy arrays).
@@ -160,10 +161,13 @@ def initialize(p, r, events, h, ks):
     n = len(p)
     bounds = [0, *events, n - 1]
     h = np.asarray(h, float)
-    tau = np.asarray(knot_times(h))
+    tau = t0 + np.asarray(knot_times(h))
     k = len(h)
     # Knot index -> action index for the knots on the action grid: the ends and every event knot.
     grid_knots = dict(zip(np.concatenate([[0], np.cumsum(ks)]).tolist(), bounds))
+    if t0 > 0:
+        # Knot 0 is off the grid and takes the geodesic interpolation of its two neighbouring commands.
+        del grid_knots[0]
     log_rot = lambda a, b: Rotation.from_matrix(a.T @ b).as_rotvec()
     q_pos, q_rot, v = np.zeros((k + 1, 3)), np.zeros((k + 1, 3, 3)), np.zeros((k + 1, 6))
     for i, x in enumerate(tau / CONTROL_DT):
