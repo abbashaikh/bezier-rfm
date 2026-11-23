@@ -156,8 +156,8 @@ def main():
     ap.add_argument("--lr", type=float, default=1e-4)
     ap.add_argument("--warmup", type=int, default=100)
     ap.add_argument("--dropout", type=float, default=0.3, help="attention and residual dropout of the Transformer")
-    ap.add_argument("--rot-frame", choices=["world", "start"], default="world",
-                    help="rotation input R or R_s^T R, and omega output in body or start frame (H28.1)")
+    ap.add_argument("--rot-frame", choices=["world", "start"], default="start",
+                    help="rotation input R or R_s^T R, and omega output in body or start frame (H28.1; H28 runs used world)")
     ap.add_argument("--n-samples", type=int, default=10)
     ap.add_argument("--nfe", type=int, nargs="+", default=[100])
     ap.add_argument("--seed", type=int, default=0)

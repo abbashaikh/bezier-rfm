@@ -220,7 +220,7 @@ def geodesic(x0, x1, t):
     return xt, u
 
 
-def features(x, cond, stats, start_frame=False):
+def features(x, cond, stats, start_frame=True):
     """Build the network inputs of the action tokens.
 
     Args:
@@ -241,7 +241,7 @@ def features(x, cond, stats, start_frame=False):
     return seg, ((x.z - stats.z_mean) / stats.z_std)[:, None]
 
 
-def velocity(model, x, t, cond, stats, start_frame=False):
+def velocity(model, x, t, cond, stats, start_frame=True):
     """Evaluate the flow velocity of the network in physical units, with zero-mean ell velocity.
 
     Args:
@@ -293,7 +293,7 @@ def loss_terms(pred, target, stats):
     ], -1)
 
 
-def loss(model, x0, x1, t, cond, stats, start_frame=False):
+def loss(model, x0, x1, t, cond, stats, start_frame=True):
     """Compute the per-sample RFM loss terms on the closed-form geodesic target.
 
     Args:
@@ -312,7 +312,7 @@ def loss(model, x0, x1, t, cond, stats, start_frame=False):
     return loss_terms(velocity(model, xt, t, cond, stats, start_frame), u, stats)
 
 
-def sample(model, x0, cond, stats, n_steps, start_frame=False):
+def sample(model, x0, cond, stats, n_steps, start_frame=True):
     """Integrate the flow from t = 0 to 1 with exp-Euler steps and rotation projection.
 
     Args:
