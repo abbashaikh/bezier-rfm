@@ -220,7 +220,7 @@ def geodesic(x0, x1, t):
     return xt, u
 
 
-def features(x, cond, stats, start_frame=True):
+def features(x, cond, stats, start_frame=True, scaled_rot=True):
     """Build the network inputs of the action tokens.
 
     Args:
@@ -228,6 +228,7 @@ def features(x, cond, stats, start_frame=True):
         cond (Cond): Conditioning inputs.
         stats (Stats): Scales.
         start_frame (bool): Give rotations as offsets R_s^T R from the start rotation; else as world R.
+        scaled_rot (bool): Give rotation entries as (R - I) / rot_scale; else raw R (H28, H28.1).
 
     Returns:
         tuple: Segment tokens, shape (n, K, 29), and z token, shape (n, 1).
@@ -235,13 +236,16 @@ def features(x, cond, stats, start_frame=True):
     n = x.z.shape[0]
     dp = (x.pos - cond.q0_pos[:, None]) / stats.pos_scale
     rot = jnp.swapaxes(cond.q0_rot, -1, -2)[:, None] @ x.rot if start_frame else x.rot
+    if scaled_rot:
+        # Puts small rotation differences on the same O(1) scale as dp (H28.2).
+        rot = (rot - jnp.eye(3)) / stats.rot_scale
     pose_f = jnp.concatenate([dp, rot.reshape(n, 2 * K, 9)], -1)
     seg = jnp.concatenate([pose_f[:, :K], pose_f[:, K:], (x.ell / stats.ell_scale)[..., None],
                            x.g.reshape(n, K, N_GRIP // K)], -1)
     return seg, ((x.z - stats.z_mean) / stats.z_std)[:, None]
 
 
-def velocity(model, x, t, cond, stats, start_frame=True):
+def velocity(model, x, t, cond, stats, start_frame=True, scaled_rot=True):
     """Evaluate the flow velocity of the network in physical units, with zero-mean ell velocity.
 
     Args:
@@ -251,11 +255,12 @@ def velocity(model, x, t, cond, stats, start_frame=True):
         cond (Cond): Conditioning inputs.
         stats (Stats): Scales.
         start_frame (bool): Network sees start-frame rotations and predicts start-frame omega.
+        scaled_rot (bool): Rotation input scaling, as in features.
 
     Returns:
         Tangent: Velocities, omega in each pose's body frame.
     """
-    seg, ztok = features(x, cond, stats, start_frame)
+    seg, ztok = features(x, cond, stats, start_frame, scaled_rot)
     so, zo = model(seg, ztok, cond.obs, cond.start, t)
     n = t.shape[0]
     # The network predicts each part in units of its loss scale.
@@ -293,7 +298,7 @@ def loss_terms(pred, target, stats):
     ], -1)
 
 
-def loss(model, x0, x1, t, cond, stats, start_frame=True):
+def loss(model, x0, x1, t, cond, stats, start_frame=True, scaled_rot=True):
     """Compute the per-sample RFM loss terms on the closed-form geodesic target.
 
     Args:
@@ -304,15 +309,16 @@ def loss(model, x0, x1, t, cond, stats, start_frame=True):
         cond (Cond): Conditioning inputs.
         stats (Stats): Scales.
         start_frame (bool): Rotation frame of the network, as in velocity.
+        scaled_rot (bool): Rotation input scaling, as in features.
 
     Returns:
         jnp.ndarray: Loss terms, shape (n, 5); the loss is their sum.
     """
     xt, u = geodesic(x0, x1, t)
-    return loss_terms(velocity(model, xt, t, cond, stats, start_frame), u, stats)
+    return loss_terms(velocity(model, xt, t, cond, stats, start_frame, scaled_rot), u, stats)
 
 
-def sample(model, x0, cond, stats, n_steps, start_frame=True):
+def sample(model, x0, cond, stats, n_steps, start_frame=True, scaled_rot=True):
     """Integrate the flow from t = 0 to 1 with exp-Euler steps and rotation projection.
 
     Args:
@@ -322,6 +328,7 @@ def sample(model, x0, cond, stats, n_steps, start_frame=True):
         stats (Stats): Scales.
         n_steps (int): Number of Euler steps.
         start_frame (bool): Rotation frame of the network, as in velocity.
+        scaled_rot (bool): Rotation input scaling, as in features.
 
     Returns:
         State: Samples at t = 1.
@@ -329,7 +336,7 @@ def sample(model, x0, cond, stats, n_steps, start_frame=True):
     dt = 1.0 / n_steps
 
     def step(x, k):
-        u = velocity(model, x, jnp.full(x.z.shape, k * dt), cond, stats, start_frame)
+        u = velocity(model, x, jnp.full(x.z.shape, k * dt), cond, stats, start_frame, scaled_rot)
         pos, rot = pose.exp(x.pos, x.rot, dt * u.v, dt * u.w)
         # Projection removes float32 drift off SO(3) (H12.1).
         return State(pos, pose.project_rot(rot), x.z + dt * u.z, x.ell + dt * u.ell, x.g + dt * u.g), None

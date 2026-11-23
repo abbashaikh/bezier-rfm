@@ -158,6 +158,8 @@ def main():
     ap.add_argument("--dropout", type=float, default=0.3, help="attention and residual dropout of the Transformer")
     ap.add_argument("--rot-frame", choices=["world", "start"], default="start",
                     help="rotation input R or R_s^T R, and omega output in body or start frame (H28.1; H28 runs used world)")
+    ap.add_argument("--rot-input", choices=["matrix", "scaled"], default="scaled",
+                    help="rotation input as (R - I) / rot_scale (H28.3) or raw R entries (H28, H28.1 runs used matrix)")
     ap.add_argument("--n-samples", type=int, default=10)
     ap.add_argument("--nfe", type=int, nargs="+", default=[100])
     ap.add_argument("--seed", type=int, default=0)
@@ -187,6 +189,7 @@ def main():
 
     # ---- training
     sf = args.rot_frame == "start"
+    sr = args.rot_input == "scaled"
     rep = jnp.repeat(jnp.arange(n_win), args.draws)
     x1_b, cond_b = jax.tree.map(lambda a: a[rep], x1_win), jax.tree.map(lambda a: a[rep], cond_win)
 
@@ -194,7 +197,7 @@ def main():
         k0, kt = jax.random.split(key)
         x0 = spline.sample_prior(k0, cond_b.q0_pos, cond_b.q0_rot, stats)
         t = jax.random.uniform(kt, rep.shape)
-        terms = spline.loss(m, x0, x1_b, t, cond_b, stats, sf).mean(0)
+        terms = spline.loss(m, x0, x1_b, t, cond_b, stats, sf, sr).mean(0)
         return terms.sum(), terms
 
     if not args.skip_train:
@@ -226,7 +229,7 @@ def main():
     tb = (jnp.tile(jnp.arange(per), n_win) + jax.random.uniform(jax.random.PRNGKey(7), (nb,))) / per
     xb1, cb = jax.tree.map(lambda a: a[ib], x1_win), jax.tree.map(lambda a: a[ib], cond_win)
     xb0 = spline.sample_prior(jax.random.PRNGKey(8), cb.q0_pos, cb.q0_rot, stats)
-    bin_terms = np.asarray(jax.jit(lambda m: spline.loss(m, xb0, xb1, tb, cb, stats, sf))(model))
+    bin_terms = np.asarray(jax.jit(lambda m: spline.loss(m, xb0, xb1, tb, cb, stats, sf, sr))(model))
     bins = np.minimum((np.asarray(tb) * n_bin).astype(int), n_bin - 1)
     binned = np.stack([bin_terms[bins == b].mean(0) for b in range(n_bin)])
 
@@ -239,7 +242,7 @@ def main():
     a_rows = np.concatenate([np.arange(p * ns, (p + 1) * ns) for p in range(0, n_win, 2)])
     b_win = np.repeat(np.arange(1, n_win, 2), ns)
     key_h = jax.random.PRNGKey(101)
-    sample_fn = jax.jit(lambda m, x0, c, n: spline.sample(m, x0, c, stats, n, sf), static_argnums=3)
+    sample_fn = jax.jit(lambda m, x0, c, n: spline.sample(m, x0, c, stats, n, sf, sr), static_argnums=3)
     results = {}
     for nfe in args.nfe:
         xs = sample_fn(model, x0s, cs, nfe)
