@@ -156,6 +156,8 @@ def main():
     ap.add_argument("--lr", type=float, default=1e-4)
     ap.add_argument("--warmup", type=int, default=100)
     ap.add_argument("--dropout", type=float, default=0.3, help="attention and residual dropout of the Transformer")
+    ap.add_argument("--rot-frame", choices=["world", "start"], default="world",
+                    help="rotation input R or R_s^T R, and omega output in body or start frame (H28.1)")
     ap.add_argument("--n-samples", type=int, default=10)
     ap.add_argument("--nfe", type=int, nargs="+", default=[100])
     ap.add_argument("--seed", type=int, default=0)
@@ -184,6 +186,7 @@ def main():
               "stats": {k: np.asarray(v).tolist() for k, v in stats._asdict().items()}}
 
     # ---- training
+    sf = args.rot_frame == "start"
     rep = jnp.repeat(jnp.arange(n_win), args.draws)
     x1_b, cond_b = jax.tree.map(lambda a: a[rep], x1_win), jax.tree.map(lambda a: a[rep], cond_win)
 
@@ -191,7 +194,7 @@ def main():
         k0, kt = jax.random.split(key)
         x0 = spline.sample_prior(k0, cond_b.q0_pos, cond_b.q0_rot, stats)
         t = jax.random.uniform(kt, rep.shape)
-        terms = spline.loss(m, x0, x1_b, t, cond_b, stats).mean(0)
+        terms = spline.loss(m, x0, x1_b, t, cond_b, stats, sf).mean(0)
         return terms.sum(), terms
 
     if not args.skip_train:
@@ -223,7 +226,7 @@ def main():
     tb = (jnp.tile(jnp.arange(per), n_win) + jax.random.uniform(jax.random.PRNGKey(7), (nb,))) / per
     xb1, cb = jax.tree.map(lambda a: a[ib], x1_win), jax.tree.map(lambda a: a[ib], cond_win)
     xb0 = spline.sample_prior(jax.random.PRNGKey(8), cb.q0_pos, cb.q0_rot, stats)
-    bin_terms = np.asarray(jax.jit(lambda m: spline.loss(m, xb0, xb1, tb, cb, stats))(model))
+    bin_terms = np.asarray(jax.jit(lambda m: spline.loss(m, xb0, xb1, tb, cb, stats, sf))(model))
     bins = np.minimum((np.asarray(tb) * n_bin).astype(int), n_bin - 1)
     binned = np.stack([bin_terms[bins == b].mean(0) for b in range(n_bin)])
 
@@ -236,7 +239,7 @@ def main():
     a_rows = np.concatenate([np.arange(p * ns, (p + 1) * ns) for p in range(0, n_win, 2)])
     b_win = np.repeat(np.arange(1, n_win, 2), ns)
     key_h = jax.random.PRNGKey(101)
-    sample_fn = jax.jit(lambda m, x0, c, n: spline.sample(m, x0, c, stats, n), static_argnums=3)
+    sample_fn = jax.jit(lambda m, x0, c, n: spline.sample(m, x0, c, stats, n, sf), static_argnums=3)
     results = {}
     for nfe in args.nfe:
         xs = sample_fn(model, x0s, cs, nfe)
@@ -287,6 +290,7 @@ def report(nfe, xs, ch, xh, cond, ws, tgt, pts, isamp, a_rows, b_win, out, losse
     pos_rms = np.sqrt(np.mean(np.sum((p - tp) ** 2, -1), (1, 2))) * 1e3
     ang = np.linalg.norm(np.asarray(pose.rot_log(jnp.swapaxes(r, -1, -2) @ tr)), axis=-1)
     rot_rms = np.degrees(np.sqrt(np.mean(ang**2, (1, 2))))
+    rot0_rms = np.degrees(np.sqrt(np.mean(ang[:, 0] ** 2, 1)))
     h = np.asarray(spline.durations(xs))
     ht = ws["h"][isamp]
     t_err = np.abs(np.concatenate([h - ht, h.sum(1, keepdims=True) - ht.sum(1, keepdims=True)], 1)).max(1) * 1e3
@@ -313,6 +317,7 @@ def report(nfe, xs, ch, xh, cond, ws, tgt, pts, isamp, a_rows, b_win, out, losse
             "pose_pass": int(pose_ok[s].sum()), "time_pass": int(time_ok[s].sum()), "grip_pass": int(g_ok[s].sum()),
             "all_pass": n_ok, "window_pass": bool(win_pass[-1]),
             "pos_rms_mm_max": float(pos_rms[s].max()), "rot_rms_deg_max": float(rot_rms[s].max()),
+            "rot0_rms_deg_max": float(rot0_rms[s].max()), "rot0_rms_deg_mean": float(rot0_rms[s].mean()),
             "time_err_ms_max": float(t_err[s].max()),
             "knot_jump_lin_max": float(jump_lin[s].max()), "knot_jump_ang_max": float(jump_ang[s].max()),
             "handover_jump_lin_max": float(hjump[hs, :3].max()) if hs.any() else None,
@@ -331,13 +336,13 @@ def report(nfe, xs, ch, xh, cond, ws, tgt, pts, isamp, a_rows, b_win, out, losse
              f"Continuity: max knot jump {summary['knot_jump_max']:.2e}, max handover jump {summary['handover_jump_max']:.2e}"
              f" (limit 1e-4 m/s and rad/s): {'pass' if cont_ok else 'FAIL'}.", "",
              "| win | demo | knot | T (s) | pose | timing | gripper | all | pass | max pos RMS (mm) | max rot RMS (deg) "
-             "| max timing err (ms) | max knot jump | max handover jump |",
-             "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+             "| max seg-0 rot RMS (deg) | max timing err (ms) | max knot jump | max handover jump |",
+             "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for q in rows:
         hj = "—" if q["handover_jump_lin_max"] is None else f"{max(q['handover_jump_lin_max'], q['handover_jump_ang_max']):.1e}"
         lines.append(f"| {q['window']} | {q['demo']} | {q['knot']} | {q['T_s']:.3f} | {q['pose_pass']}/{ns} | "
                      f"{q['time_pass']}/{ns} | {q['grip_pass']}/{ns} | {q['all_pass']}/{ns} | "
-                     f"{'yes' if q['window_pass'] else 'NO'} | {q['pos_rms_mm_max']:.2f} | {q['rot_rms_deg_max']:.2f} | "
+                     f"{'yes' if q['window_pass'] else 'NO'} | {q['pos_rms_mm_max']:.2f} | {q['rot_rms_deg_max']:.2f} | {q['rot0_rms_deg_max']:.2f} | "
                      f"{q['time_err_ms_max']:.1f} | {max(q['knot_jump_lin_max'], q['knot_jump_ang_max']):.1e} | {hj} |")
     (out / "results.md").write_text("\n".join(lines) + "\n")
     print("\n".join(lines))
