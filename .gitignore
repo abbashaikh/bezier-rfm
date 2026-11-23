@@ -12,8 +12,11 @@ wheels/
 docs/*
 data/*
 checkpoints/*
+*.log
 
 AGENTS.md
 CLAUDE.md
 .agents/*
 .claude/*
+
+*.pem
