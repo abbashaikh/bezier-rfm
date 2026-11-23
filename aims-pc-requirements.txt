@@ -8,16 +8,30 @@ absl-py==2.5.0
     #   tensorboard
 aiofiles==25.1.0
     # via orbax-checkpoint
-anyio==4.15.1 ; sys_platform != 'emscripten'
-    # via httpx2
+annotated-types==0.8.0
+    # via pydantic
+anyio==4.15.1
+    # via
+    #   cwevals
+    #   httpx
+    #   httpx2
 appnope==1.0.0 ; sys_platform == 'darwin'
     # via ipykernel
 asttokens==3.0.2
     # via stack-data
+certifi==2026.7.22
+    # via
+    #   httpcore
+    #   httpx
+    #   requests
 cffi==2.1.1 ; implementation_name == 'pypy'
     # via pyzmq
+charset-normalizer==3.5.1
+    # via requests
 click==8.5.0
-    # via huggingface-hub
+    # via
+    #   huggingface-hub
+    #   wandb
 colorama==0.4.6 ; sys_platform == 'win32'
     # via
     #   ipython
@@ -27,12 +41,16 @@ comm==0.2.3
     # via ipykernel
 contourpy==1.4.0
     # via matplotlib
+cwevals==0.0.1b3
+    # via wandb
 cycler==0.12.1
     # via matplotlib
 daqp==0.11.0
     # via qpsolvers
 debugpy==1.8.22
     # via ipykernel
+distro==1.9.0
+    # via cwevals
 egl-probe==1.0.2
     # via robomimic
 etils==1.14.0
@@ -62,16 +80,22 @@ glfw==2.11.0
     #   mujoco
 grpcio==1.85.1
     # via tensorboard
-h11==0.16.0 ; sys_platform != 'emscripten'
-    # via httpcore2
+h11==0.16.0
+    # via
+    #   httpcore
+    #   httpcore2
 h5py==3.16.0
     # via
     #   bezier-rfm
     #   robomimic
 hf-xet==1.8.0 ; platform_machine == 'AMD64' or platform_machine == 'ARM64' or platform_machine == 'aarch64' or platform_machine == 'amd64' or platform_machine == 'arm64' or platform_machine == 'x86_64'
     # via huggingface-hub
+httpcore==1.0.9
+    # via httpx
 httpcore2==2.16.0 ; sys_platform != 'emscripten'
     # via httpx2
+httpx==0.28.1
+    # via cwevals
 httpx2==2.16.0
     # via huggingface-hub
 httpx2-jsfetch==1.0 ; sys_platform == 'emscripten'
@@ -83,7 +107,9 @@ humanize==4.16.0
 idna==3.20
     # via
     #   anyio
+    #   httpx
     #   httpx2
+    #   requests
 imageio==2.38.1
     # via
     #   bezier-rfm
@@ -202,6 +228,19 @@ opencv-python==5.0.0.93
     # via
     #   bezier-rfm
     #   robosuite
+opentelemetry-api==1.45.2
+    # via
+    #   opentelemetry-sdk
+    #   opentelemetry-semantic-conventions
+    #   wandb
+opentelemetry-exporter-otlp-proto-common==1.45.2
+    # via wandb
+opentelemetry-proto==1.45.2
+    # via opentelemetry-exporter-otlp-proto-common
+opentelemetry-sdk==1.45.2
+    # via wandb
+opentelemetry-semantic-conventions==0.66b2
+    # via opentelemetry-sdk
 opt-einsum==3.4.0
     # via jax
 optax==0.2.8
@@ -218,6 +257,7 @@ packaging==26.3
     #   pytest
     #   tensorboard
     #   tensorboardx
+    #   wandb
 parso==0.8.7
     # via jedi
 pexpect==4.9.0 ; sys_platform != 'emscripten' and sys_platform != 'win32'
@@ -230,7 +270,9 @@ pillow==12.3.0
     #   tensorboard
     #   torchvision
 platformdirs==4.11.11
-    # via jupyter-core
+    # via
+    #   jupyter-core
+    #   wandb
 pluggy==1.7.0
     # via pytest
 prometheus-client==0.26.0
@@ -239,9 +281,11 @@ prompt-toolkit==3.0.53
     # via ipython
 protobuf==7.36.2
     # via
+    #   opentelemetry-proto
     #   orbax-checkpoint
     #   tensorboard
     #   tensorboardx
+    #   wandb
 psutil==7.2.2
     # via
     #   ipykernel
@@ -254,6 +298,12 @@ pure-eval==0.2.4
     # via stack-data
 pycparser==3.0 ; implementation_name == 'pypy'
     # via cffi
+pydantic==2.14.4
+    # via
+    #   cwevals
+    #   wandb
+pydantic-core==2.50.5
+    # via pydantic
 pygments==2.21.0
     # via
     #   ipython
@@ -299,12 +349,15 @@ pyyaml==6.0.3
     #   flax
     #   huggingface-hub
     #   orbax-checkpoint
+    #   wandb
 pyzmq==27.2.0
     # via
     #   ipykernel
     #   jupyter-client
 qpsolvers==4.13.0
     # via mink
+requests==2.34.2
+    # via wandb
 rich==15.0.0
     # via flax
 robomimic @ git+https://github.com/ARISE-Initiative/robomimic.git@7c66e7a41b5d9dcc905b1a68346bfee1b49b79c9
@@ -329,6 +382,8 @@ six==1.17.0
     #   pynput
     #   python-dateutil
     #   python-xlib
+sniffio==1.3.1
+    # via cwevals
 stack-data==0.6.3
     # via ipython
 sympy==1.14.0
@@ -390,6 +445,7 @@ truststore==0.10.5 ; sys_platform != 'emscripten'
 typing-extensions==4.16.0
     # via
     #   anyio
+    #   cwevals
     #   etils
     #   flax
     #   grpcio
@@ -397,13 +453,28 @@ typing-extensions==4.16.0
     #   huggingface-hub
     #   jupyter-client
     #   mink
+    #   opentelemetry-api
+    #   opentelemetry-sdk
+    #   opentelemetry-semantic-conventions
     #   orbax-checkpoint
+    #   pydantic
+    #   pydantic-core
     #   torch
+    #   typing-inspection
+    #   wandb
+typing-inspection==0.4.5
+    # via pydantic
+urllib3==2.8.0
+    # via requests
 uvloop==0.23.0 ; sys_platform != 'win32'
     # via orbax-checkpoint
+wandb==0.31.2
+    # via bezier-rfm
 wcwidth==0.8.4
     # via prompt-toolkit
 werkzeug==3.1.9
     # via tensorboard
+xxhash==4.1.0
+    # via wandb
 zipp==4.1.1
     # via etils
