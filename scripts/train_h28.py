@@ -155,6 +155,7 @@ def main():
     ap.add_argument("--draws", type=int, default=4, help="prior draws per window per batch (batch = 8 x draws)")
     ap.add_argument("--lr", type=float, default=1e-4)
     ap.add_argument("--warmup", type=int, default=100)
+    ap.add_argument("--dropout", type=float, default=0.3, help="attention and residual dropout of the Transformer")
     ap.add_argument("--n-samples", type=int, default=10)
     ap.add_argument("--nfe", type=int, nargs="+", default=[100])
     ap.add_argument("--seed", type=int, default=0)
@@ -178,7 +179,7 @@ def main():
         print(f"  {i}: demo {ws['demo'][i]} knot {ws['knot'][i]} T {np.exp(ws['z'][i]):.3f} s  g0 {ws['gripper'][i, :4]}")
     x1_win, cond_win = spline.target_state(ws), spline.make_cond(ws, stats)
 
-    model = SplineTransformer(nnx.Rngs(params=args.seed, dropout=args.seed + 1))
+    model = SplineTransformer(nnx.Rngs(params=args.seed, dropout=args.seed + 1), dropout=args.dropout)
     config = {**vars(args), "val_demos": sorted(val.tolist()), "windows_idx": sel.tolist(),
               "stats": {k: np.asarray(v).tolist() for k, v in stats._asdict().items()}}
 
