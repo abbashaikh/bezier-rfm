@@ -36,7 +36,12 @@ def env_worker(conn, env_args, source):
     while True:
         cmd, arg = conn.recv()
         if cmd == "reset":
-            load_demo_model(env, data[arg])
+            if isinstance(arg, int):
+                # Test start: robosuite draws the object placement from the global NumPy RNG, as in DP's seeded envs.
+                np.random.seed(arg)
+                env.reset()
+            else:
+                load_demo_model(env, data[arg])
             # Refreshed start, as in scripts/screen_replay.py.
             arm_controller(env).new_update = True
             pose = read_result(env)
@@ -45,7 +50,8 @@ def env_worker(conn, env_args, source):
             env.step(arg)
             # After mj_step, site poses describe the qpos before the last integration.
             base.sim.forward()
-            conn.send((observe(), bool(base._check_success())))
+            pose = read_result(env)
+            conn.send((observe(), bool(base._check_success()), pose["pos"], pose["rot"]))
         else:
             conn.close()
             return
@@ -64,19 +70,20 @@ def pad_requests(requests, size):
     return requests + [requests[-1]] * (size - len(requests))
 
 
-def run_group(conns, jobs, policy, batch_size, hold, max_steps):
+def run_group(conns, jobs, policy, batch_size, hold, max_steps, stop_on_success=False):
     """Run one group of episodes in lockstep, one per environment.
 
     Args:
         conns (list): Pipe ends of the environment workers, at least len(jobs).
-        jobs (list): Episode dicts: demo (str), optional v0 (6,), optional noise (pos (M, 3), rotvec (M, 3)).
+        jobs (list): Episode dicts: demo (str name, or int env seed), optional v0 (6,), optional noise (pos (M, 3), rotvec (M, 3)).
         policy (callable): Maps a padded list of requests to one window dict per request.
         batch_size (int): Fixed policy batch size.
         hold (int): Steps that repeat the last command after the policy ends the episode.
         max_steps (int): Step cap per episode, or None.
+        stop_on_success (bool): End an episode at its first success.
 
     Returns:
-        list: Per episode: success, first success step, steps and the executed actions (S, 7).
+        list: Per episode: success, first success step, steps, executed actions (S, 7) and achieved grip-site poses (S, 3), (S, 3, 3).
     """
     eps = []
     for conn, job in zip(conns, jobs):
@@ -84,7 +91,7 @@ def run_group(conns, jobs, policy, batch_size, hold, max_steps):
     for conn, job in zip(conns, jobs):
         obs, pos, rot = conn.recv()
         eps.append({"job": job, "ex": Executor(pos, rot, job.get("v0")), "obs": [obs], "queue": [], "done": False,
-                    "ended": False, "hold": 0, "actions": [], "first": None, "calls": 0})
+                    "ended": False, "hold": 0, "actions": [], "first": None, "calls": 0, "pos": [], "rot": []})
     while not all(e["done"] for e in eps):
         # The simulator is paused here: the windows are planned before any environment steps again.
         need = [e for e in eps if not e["done"] and not e["ended"] and not e["queue"]]
@@ -126,18 +133,22 @@ def run_group(conns, jobs, policy, batch_size, hold, max_steps):
         for e, conn in zip(eps, conns):
             if e["done"]:
                 continue
-            obs, success = conn.recv()
+            obs, success, pos, rot = conn.recv()
             e["obs"].append(obs)
+            e["pos"].append(pos)
+            e["rot"].append(rot)
             steps = len(e["obs"]) - 1
             if success and e["first"] is None:
                 e["first"] = steps
-            if (e["ended"] and not e["queue"] and e["hold"] >= hold) or (max_steps is not None and steps >= max_steps):
+            if (e["ended"] and not e["queue"] and e["hold"] >= hold) or (max_steps is not None and steps >= max_steps) \
+                    or (stop_on_success and success):
                 e["done"] = True
     return [{"demo": e["job"]["demo"], "success": e["first"] is not None, "first_success_step": e["first"],
-             "steps": len(e["obs"]) - 1, "calls": e["calls"], "actions": np.array(e["actions"])} for e in eps]
+             "steps": len(e["obs"]) - 1, "calls": e["calls"], "actions": np.array(e["actions"]),
+             "achieved_pos": np.array(e["pos"]), "achieved_rot": np.array(e["rot"])} for e in eps]
 
 
-def rollout(env_args, source, jobs, policy, n_envs=10, batch_size=16, hold=60, max_steps=None):
+def rollout(env_args, source, jobs, policy, n_envs=10, batch_size=16, hold=60, max_steps=None, stop_on_success=False):
     """Run all episodes in groups of n_envs lockstep environments.
 
     Args:
@@ -149,6 +160,7 @@ def rollout(env_args, source, jobs, policy, n_envs=10, batch_size=16, hold=60, m
         batch_size (int): Fixed policy batch size.
         hold (int): Steps that repeat the last command after the policy ends the episode.
         max_steps (int): Step cap per episode, or None.
+        stop_on_success (bool): End an episode at its first success.
 
     Returns:
         list: One result dict per job, in job order.
@@ -167,7 +179,7 @@ def rollout(env_args, source, jobs, policy, n_envs=10, batch_size=16, hold=60, m
     try:
         for start in range(0, len(jobs), n):
             group = jobs[start:start + n]
-            results += run_group(conns[:len(group)], group, policy, batch_size, hold, max_steps)
+            results += run_group(conns[:len(group)], group, policy, batch_size, hold, max_steps, stop_on_success)
             print(f"Finished {len(results)} of {len(jobs)} episodes", flush=True)
     finally:
         for conn in conns:

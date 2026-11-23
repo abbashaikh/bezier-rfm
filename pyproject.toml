@@ -24,6 +24,7 @@ dependencies = [
     "imageio-ffmpeg>=0.8.1",
     "opencv-python>=5.0.0",
     "glfw>=2.11.0",
+    "wandb>=0.31.2",
 ]
 
 [dependency-groups]
