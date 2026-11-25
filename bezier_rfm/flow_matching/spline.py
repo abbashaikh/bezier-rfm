@@ -6,12 +6,15 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from bezier_rfm.datasets.windows import CONTROL_DT
 from bezier_rfm.fitting import bezier
 from bezier_rfm.manifolds import pose
 
 K = 3
 N_GRIP = 12
 TERMS = ("pos", "rot", "z", "ell", "grip")
+EEF_POS = slice(44, 47)  # robot0_eef_pos in an observation (windows.OBS_KEYS)
+N_SPEED_BINS = 10
 
 
 class State(NamedTuple):
@@ -42,6 +45,7 @@ class Cond(NamedTuple):
     q0_pos: jnp.ndarray  # (n, 3)
     q0_rot: jnp.ndarray  # (n, 3, 3)
     v0: jnp.ndarray  # (n, 6), physical units
+    log_t_base: jnp.ndarray = 0.0  # (n,), log of the speed-based duration; 0 without a speed curve
 
 
 class Stats(NamedTuple):
@@ -51,7 +55,7 @@ class Stats(NamedTuple):
     knot_rot: jnp.ndarray  # (2,)
     handle_pos: jnp.ndarray  # ()
     handle_rot: jnp.ndarray  # ()
-    z_mean: jnp.ndarray  # ()
+    z_mean: jnp.ndarray  # (), of z - log_t_base
     z_std: jnp.ndarray  # ()
     ell_scale: jnp.ndarray  # ()
     pos_scale: jnp.ndarray  # (): pooled offset from q_0
@@ -62,6 +66,8 @@ class Stats(NamedTuple):
     start_max: jnp.ndarray  # (3,)
     v0_lin: jnp.ndarray  # ()
     v0_ang: jnp.ndarray  # ()
+    base_speed: jnp.ndarray | None = None  # (B,), m/s, curve points of T_base (H31)
+    base_T: jnp.ndarray | None = None  # (B,), s
 
 
 def _angle(r_a, r_b):
@@ -78,11 +84,68 @@ def _rms_rot(theta):
     return np.sqrt(np.mean(theta**2) / 3.0)
 
 
-def fit_stats(w):
+def start_speed(obs):
+    """Compute the linear end-effector speed of the two observations.
+
+    Args:
+        obs (np.ndarray or jnp.ndarray): Raw observations, shape (n, 2, D).
+
+    Returns:
+        np.ndarray or jnp.ndarray: Speeds in m/s, shape (n,); 0 when both observations are equal.
+    """
+    d = obs[:, 1, EEF_POS] - obs[:, 0, EEF_POS]
+    return (d**2).sum(-1) ** 0.5 / CONTROL_DT
+
+
+def time_base_rows(w):
+    """Mark the windows of the speed curve fit: grid 0, no braking tail, a recorded previous frame.
+
+    Args:
+        w (dict): Window arrays grid, n_tail and t_start (N,).
+
+    Returns:
+        np.ndarray: Boolean mask, shape (N,).
+    """
+    return (w["grid"] == 0) & (w["n_tail"] == 0) & (np.floor(w["t_start"] / CONTROL_DT + 1e-9) > 0)
+
+
+def fit_time_base(w):
+    """Fit the median total duration against start speed, as in H30.2.
+
+    Args:
+        w (dict): Training window arrays obs (N,2,D), z (N,), grid, n_tail and t_start (N,).
+
+    Returns:
+        tuple: Curve speeds in m/s and durations in s, each shape (B,).
+    """
+    keep = time_base_rows(w)
+    s, T = start_speed(w["obs"][keep]), np.exp(w["z"][keep])
+    edges = np.unique(np.quantile(s, np.linspace(0, 1, N_SPEED_BINS + 1)))
+    group = np.searchsorted(edges[1:-1], s, side="right")
+    return tuple(np.array([np.median(a[group == i]) for i in np.unique(group)]) for a in (s, T))
+
+
+def log_time_base(obs, stats):
+    """Evaluate log T_base at the start speed; zero without a speed curve.
+
+    Args:
+        obs (jnp.ndarray): Raw observations, shape (n, 2, D).
+        stats (Stats): Scales.
+
+    Returns:
+        jnp.ndarray: log T_base, shape (n,).
+    """
+    if stats.base_T is None:
+        return jnp.zeros(obs.shape[0], jnp.float32)
+    return jnp.log(jnp.interp(start_speed(obs), stats.base_speed, stats.base_T))
+
+
+def fit_stats(w, time_base="none"):
     """Fit all scales on training windows.
 
     Args:
         w (dict): Window arrays q_pos (N,K+1,3), q_rot (N,K+1,3,3), H_pos, H_rot, logits (N,K), z (N,), v0 (N,6), obs (N,2,D).
+        time_base (str): "none" for direct log T, "speed" for log(T / T_base(s)); "speed" also needs grid, n_tail, t_start.
 
     Returns:
         Stats: Scales as float32 arrays.
@@ -91,13 +154,17 @@ def fit_stats(w):
     poses_p = np.concatenate([qp[:, 1:], hp[:, 1:]], axis=1)
     poses_r = np.concatenate([qr[:, 1:], hr[:, 1:]], axis=1)
     obs = w["obs"].reshape(-1, w["obs"].shape[-1])
+    z, base = w["z"], {}
+    if time_base == "speed":
+        base = dict(zip(("base_speed", "base_T"), fit_time_base(w)))
+        z = z - np.log(np.interp(start_speed(w["obs"]), base["base_speed"], base["base_T"]))
     s = Stats(
         knot_pos=np.array([_rms_pos(qp[:, 1] - qp[:, 0]), _rms_pos(qp[:, 2:] - qp[:, 1:-1])]),
         knot_rot=np.array([_rms_rot(_angle(qr[:, 0], qr[:, 1])), _rms_rot(_angle(qr[:, 1:-1], qr[:, 2:]))]),
         handle_pos=_rms_pos(hp[:, 1:] - qp[:, 1:]),
         handle_rot=_rms_rot(_angle(qr[:, 1:], hr[:, 1:])),
-        z_mean=w["z"].mean(),
-        z_std=w["z"].std(),
+        z_mean=z.mean(),
+        z_std=z.std(),
         ell_scale=np.sqrt(np.mean(np.sum(w["logits"] ** 2, axis=-1)) / (K - 1)),
         pos_scale=_rms_pos(poses_p - qp[:, :1]),
         rot_scale=_rms_rot(_angle(qr[:, :1], poses_r)),
@@ -107,8 +174,9 @@ def fit_stats(w):
         start_max=qp[:, 0].max(0),
         v0_lin=_rms_pos(w["v0"][:, :3]),
         v0_ang=_rms_pos(w["v0"][:, 3:]),
+        **base,
     )
-    return Stats(*[jnp.asarray(a, jnp.float32) for a in s])
+    return Stats(*[None if a is None else jnp.asarray(a, jnp.float32) for a in s])
 
 
 def make_cond(w, stats):
@@ -142,7 +210,7 @@ def make_cond_from(obs, q0_pos, q0_rot, v0, stats):
     obs_n = 2.0 * (obs - stats.obs_min) / span - 1.0
     p_n = 2.0 * (q0_pos - stats.start_min) / (stats.start_max - stats.start_min) - 1.0
     start = jnp.concatenate([p_n, q0_rot.reshape(-1, 9), v0[:, :3] / stats.v0_lin, v0[:, 3:] / stats.v0_ang], axis=-1)
-    return Cond(obs_n, start, q0_pos, q0_rot, v0)
+    return Cond(obs_n, start, q0_pos, q0_rot, v0, log_time_base(obs, stats))
 
 
 def target_state(w):
@@ -164,7 +232,7 @@ def target_state(w):
     )
 
 
-def sample_prior(key, q0_pos, q0_rot, stats):
+def sample_prior(key, q0_pos, q0_rot, stats, log_t_base=0.0):
     """Draw prior states: random-walk knots from q_0, perturbed handles, Gaussian timing and gripper.
 
     Args:
@@ -172,6 +240,7 @@ def sample_prior(key, q0_pos, q0_rot, stats):
         q0_pos (jnp.ndarray): Start positions, shape (n, 3).
         q0_rot (jnp.ndarray): Start rotations, shape (n, 3, 3).
         stats (Stats): Scales.
+        log_t_base (jnp.ndarray): Cond.log_t_base, shape (n,).
 
     Returns:
         State: Prior samples.
@@ -195,7 +264,8 @@ def sample_prior(key, q0_pos, q0_rot, stats):
     return State(
         pos=jnp.concatenate([qp, hp], 1),
         rot=jnp.concatenate([qr, hr], 1),
-        z=stats.z_mean + stats.z_std * jax.random.normal(kz, (n,)),
+        # z stays log T: with a speed curve, r = z - log_t_base has the fitted mean and std (H31).
+        z=log_t_base + stats.z_mean + stats.z_std * jax.random.normal(kz, (n,)),
         ell=ell,
         g=jax.random.normal(kg, (n, N_GRIP)),
     )
@@ -242,7 +312,7 @@ def features(x, cond, stats, start_frame=True, scaled_rot=True):
     pose_f = jnp.concatenate([dp, rot.reshape(n, 2 * K, 9)], -1)
     seg = jnp.concatenate([pose_f[:, :K], pose_f[:, K:], (x.ell / stats.ell_scale)[..., None],
                            x.g.reshape(n, K, N_GRIP // K)], -1)
-    return seg, ((x.z - stats.z_mean) / stats.z_std)[:, None]
+    return seg, ((x.z - cond.log_t_base - stats.z_mean) / stats.z_std)[:, None]
 
 
 def velocity(model, x, t, cond, stats, start_frame=True, scaled_rot=True):

@@ -64,7 +64,7 @@ def save_stats(path, stats, val):
         stats (spline.Stats): Scales fitted on the training demos.
         val (np.ndarray): Validation demo indices.
     """
-    d = {k: np.asarray(v).tolist() for k, v in stats._asdict().items()}
+    d = {k: np.asarray(v).tolist() for k, v in stats._asdict().items() if v is not None}
     Path(path).write_text(json.dumps({"stats": d, "val_demos": [int(v) for v in val]}, indent=1))
 
 

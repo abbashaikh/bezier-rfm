@@ -15,8 +15,7 @@
   "split_seed": 42,
   "seed": 0,
   "nfe": 10,
-  "n_fixed": 64,
-  "fixed_draws": 4,
+  "time_base": "none",
   "bin_draws": 4096,
   "wandb_project": "bezier-rfm"
 }

@@ -42,7 +42,7 @@ def make_policy(model, stats, nfe, key):
     @jax.jit
     def run(model, obs, q0_pos, q0_rot, v0, key):
         cond = spline.make_cond_from(obs, q0_pos, q0_rot, v0, stats)
-        return spline.sample(model, spline.sample_prior(key, q0_pos, q0_rot, stats), cond, stats, nfe)
+        return spline.sample(model, spline.sample_prior(key, q0_pos, q0_rot, stats, cond.log_t_base), cond, stats, nfe)
 
     times, calls = [], [0]
 
