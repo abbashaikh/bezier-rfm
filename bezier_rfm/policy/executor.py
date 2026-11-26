@@ -1,4 +1,4 @@
-"""Receding execution of K-segment windows as 20 Hz absolute OSC commands, with m = 1 (plan 5.2, 9.2)."""
+"""Receding execution of K-segment windows as 20 Hz absolute OSC commands, m segments per window (plan 5.2, 9.2)."""
 
 import jax
 import jax.numpy as jnp
@@ -102,9 +102,9 @@ def to_commands(pos, rot, grip):
 
 
 class Executor:
-    """Turn one window per knot into 20 Hz commands: execute segment 0, hand knot 1 to the next window."""
+    """Turn one window per knot into 20 Hz commands: execute segments 0..m-1, hand knot m to the next window."""
 
-    def __init__(self, q0_pos, q0_rot, v0=None, t0=0.0):
+    def __init__(self, q0_pos, q0_rot, v0=None, t0=0.0, m=1):
         """Start at a pose and velocity at time t0.
 
         Args:
@@ -112,6 +112,7 @@ class Executor:
             q0_rot (np.ndarray): Start rotation, shape (3, 3).
             v0 (np.ndarray): Start velocity, shape (6,); None means rest.
             t0 (float): Time of the start knot in s.
+            m (int): Segments executed per window.
 
         Returns:
             None: Nothing.
@@ -119,6 +120,7 @@ class Executor:
         self.q_pos, self.q_rot = np.asarray(q0_pos, float), np.asarray(q0_rot, float)
         self.v = np.zeros(6) if v0 is None else np.asarray(v0, float)
         self.t = float(t0)
+        self.m = int(m)
         self.log = []
 
     def obs_frames(self):
@@ -134,7 +136,7 @@ class Executor:
         return np.array([max(o - 1, 0), o]), self.t - CONTROL_DT * o
 
     def step(self, window, last=False):
-        """Execute segment 0 of a window (all segments when last) and move the start knot to knot 1.
+        """Execute the first m segments of a window (all segments when last) and move the start knot to knot m.
 
         Args:
             window (dict): Window poses, z, logits and gripper samples (see window_controls).
@@ -144,14 +146,14 @@ class Executor:
             tuple: Command indices (M,) and absolute actions (M, 7).
         """
         c, h = window_controls(window, self.q_pos, self.q_rot, self.v)
-        n_seg = len(h) if last else 1
+        n_seg = len(h) if last else self.m
         t_end = self.t + h[:n_seg].sum()
         idx = grid_steps(self.t, t_end, closed=last)
         t_rel = CONTROL_DT * idx - self.t
         pos, rot = (np.asarray(a) for a in _decode(c, jnp.asarray(h), jnp.asarray(t_rel)))
         cmds = to_commands(pos, rot, gripper_at(t_rel, h, window["gripper"]))
         self.log.append({"t": self.t, "controls": c, "h": h})
-        # Hand the planned pose and velocity at knot 1 to the next window; for knot 1 the next duration is h_1.
+        # Hand the planned pose and velocity at knot m to the next window; for knot m the next duration is h_m.
         k = n_seg
         h_next = h[k] if k < len(h) else h[-1]
         self.v = knot_velocity(c.q_pos[k], c.q_rot[k], c.h_pos[k], c.h_rot[k], h_next)

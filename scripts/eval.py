@@ -3,6 +3,7 @@
 Run from the repo root, next to scripts/train.py (same --run):
     uv run python scripts/eval.py --run checkpoints/h30 --watch          # evaluate each new checkpoint until the last
     uv run python scripts/eval.py --run checkpoints/h30 --steps 19000    # one checkpoint
+    uv run python scripts/eval.py --run checkpoints/h30 --m 2 --wandb disabled   # 2 segments per call, to eval_m2.jsonl
 The W&B key comes only from the WANDB_API_KEY environment variable.
 """
 
@@ -106,7 +107,7 @@ def evaluate(path, model, stats, cfg, args, env_args):
     jobs += [{"demo": f"demo_{i}", "kind": "train"} for i in range(args.n_train)]
     t0 = time.time()
     results = rollout(env_args, str(args.source), jobs, policy, n_envs=args.n_envs, batch_size=args.n_envs,
-                      max_steps=args.max_steps, stop_on_success=True)
+                      max_steps=args.max_steps, stop_on_success=True, m=args.m)
     gaps = [tracking_gap(r) for r in results]
     test = [r["success"] for j, r in zip(jobs, results) if j["kind"] == "test"]
     train = [r["success"] for j, r in zip(jobs, results) if j["kind"] == "train"]
@@ -167,17 +168,21 @@ def main():
     ap.add_argument("--n-envs", type=int, default=10)
     ap.add_argument("--nfe", type=int, help="sampler steps (default: the run config)")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--m", type=int, default=1, help="segments executed per policy call")
     ap.add_argument("--source", type=Path, default=ROOT / "low_dim_v15.hdf5", help="demos with the MuJoCo models")
     ap.add_argument("--demos-file", type=Path, default=ROOT / "low_dim_abs_q0start.hdf5", help="env_args source")
     ap.add_argument("--wandb", choices=["online", "offline", "disabled"], default="online")
     args = ap.parse_args()
+    if args.m != 1 and args.wandb != "disabled":
+        # The W&B keys have no m, so m != 1 would overwrite the m = 1 curves of the training run.
+        ap.error("--m other than 1 needs --wandb disabled")
     run_dir = Path(args.run)
     cfg = json.loads((run_dir / "config.json").read_text())
     stats, _ = wl.load_stats(run_dir / "stats.json")
     with h5py.File(args.demos_file, "r") as d:
         env_args = d["data"].attrs["env_args"]
     model = SplineTransformer(nnx.Rngs(params=0, dropout=0), dropout=cfg["dropout"])
-    out_file = run_dir / "eval.jsonl"
+    out_file = run_dir / ("eval.jsonl" if args.m == 1 else f"eval_m{args.m}.jsonl")
     done = set()
     if out_file.exists():
         done = {json.loads(line)["step"] for line in out_file.read_text().splitlines()}
@@ -190,10 +195,11 @@ def main():
         for step in todo:
             r = evaluate(saved[step], model, stats, cfg, args, env_args)
             r["step"] = step
+            r["m"] = args.m
             with open(out_file, "a") as f:
                 f.write(json.dumps(r) + "\n")
             done.add(step)
-            print(f"step {step}: success test {r['rollout/success_test']:.2f} train {r['rollout/success_train']:.2f} "
+            print(f"step {step} m {args.m}: success test {r['rollout/success_test']:.2f} train {r['rollout/success_train']:.2f} "
                   f"inference {r['rollout/inference_ms_median']:.1f} ms gap {r['rollout/gap_pos_mm_mean']:.2f} mm "
                   f"{r['rollout/gap_rot_deg_mean']:.2f} deg ({r['rollout/wall_s']:.0f} s)", flush=True)
             if wb is not None:

@@ -70,7 +70,7 @@ def pad_requests(requests, size):
     return requests + [requests[-1]] * (size - len(requests))
 
 
-def run_group(conns, jobs, policy, batch_size, hold, max_steps, stop_on_success=False):
+def run_group(conns, jobs, policy, batch_size, hold, max_steps, stop_on_success=False, m=1):
     """Run one group of episodes in lockstep, one per environment.
 
     Args:
@@ -81,6 +81,7 @@ def run_group(conns, jobs, policy, batch_size, hold, max_steps, stop_on_success=
         hold (int): Steps that repeat the last command after the policy ends the episode.
         max_steps (int): Step cap per episode, or None.
         stop_on_success (bool): End an episode at its first success.
+        m (int): Segments executed per window.
 
     Returns:
         list: Per episode: success, first success step, steps, executed actions (S, 7) and achieved grip-site poses (S, 3), (S, 3, 3).
@@ -90,7 +91,7 @@ def run_group(conns, jobs, policy, batch_size, hold, max_steps, stop_on_success=
         conn.send(("reset", job["demo"]))
     for conn, job in zip(conns, jobs):
         obs, pos, rot = conn.recv()
-        eps.append({"job": job, "ex": Executor(pos, rot, job.get("v0")), "obs": [obs], "queue": [], "done": False,
+        eps.append({"job": job, "ex": Executor(pos, rot, job.get("v0"), m=m), "obs": [obs], "queue": [], "done": False,
                     "ended": False, "hold": 0, "actions": [], "first": None, "calls": 0, "pos": [], "rot": []})
     while not all(e["done"] for e in eps):
         # The simulator is paused here: the windows are planned before any environment steps again.
@@ -148,7 +149,8 @@ def run_group(conns, jobs, policy, batch_size, hold, max_steps, stop_on_success=
              "achieved_pos": np.array(e["pos"]), "achieved_rot": np.array(e["rot"])} for e in eps]
 
 
-def rollout(env_args, source, jobs, policy, n_envs=10, batch_size=16, hold=60, max_steps=None, stop_on_success=False):
+def rollout(env_args, source, jobs, policy, n_envs=10, batch_size=16, hold=60, max_steps=None, stop_on_success=False,
+            m=1):
     """Run all episodes in groups of n_envs lockstep environments.
 
     Args:
@@ -161,6 +163,7 @@ def rollout(env_args, source, jobs, policy, n_envs=10, batch_size=16, hold=60, m
         hold (int): Steps that repeat the last command after the policy ends the episode.
         max_steps (int): Step cap per episode, or None.
         stop_on_success (bool): End an episode at its first success.
+        m (int): Segments executed per window.
 
     Returns:
         list: One result dict per job, in job order.
@@ -179,7 +182,7 @@ def rollout(env_args, source, jobs, policy, n_envs=10, batch_size=16, hold=60, m
     try:
         for start in range(0, len(jobs), n):
             group = jobs[start:start + n]
-            results += run_group(conns[:len(group)], group, policy, batch_size, hold, max_steps, stop_on_success)
+            results += run_group(conns[:len(group)], group, policy, batch_size, hold, max_steps, stop_on_success, m)
             print(f"Finished {len(results)} of {len(jobs)} episodes", flush=True)
     finally:
         for conn in conns:
