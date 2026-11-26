@@ -4,6 +4,7 @@ Run from the repo root:
     uv run python scripts/train.py --run checkpoints/h30_m1 --steps 100000      # milestone 1
     uv run python scripts/train.py --run checkpoints/h30                        # full run (config budget)
     uv run python scripts/train.py --run checkpoints/h31_m1 --steps 100000 --time-base speed   # H31
+    uv run python scripts/train.py --run checkpoints/h32 --steps 3040000 --n-evals 160 --weight-decay 1e-4   # H32
     uv run python scripts/train.py --run checkpoints/h30 --resume               # continue after a stop
 The W&B key comes only from the WANDB_API_KEY environment variable.
 """
@@ -147,8 +148,9 @@ def main():
     ap.add_argument("--run", required=True, help="run directory, e.g. checkpoints/h30")
     ap.add_argument("--steps", type=int, help="gradient steps (overrides the config)")
     ap.add_argument("--dropout", type=float, help="Transformer dropout (overrides the config)")
+    ap.add_argument("--weight-decay", type=float, help="AdamW weight decay (overrides the config)")
     ap.add_argument("--time-base", choices=["none", "speed"], help="duration target (overrides the config): log T, or log(T / T_base(s)) (H31)")
-    ap.add_argument("--n-evals", type=int, help="evaluation points (overrides the config; smoke tests only)")
+    ap.add_argument("--n-evals", type=int, help="evaluation points (overrides the config; keep steps / n_evals = 19000 for comparable checkpoints)")
     ap.add_argument("--block-steps", type=int, help="steps per jitted block (overrides the config; smoke tests only)")
     ap.add_argument("--resume", action="store_true", help="continue from <run>/resume.pkl with the saved config")
     ap.add_argument("--wandb", choices=["online", "offline", "disabled"], default="online")
@@ -162,7 +164,7 @@ def main():
         if (run_dir / "resume.pkl").exists():
             raise SystemExit(f"{run_dir} has a resume file; pass --resume or choose a new --run")
         cfg = json.loads(Path(args.config).read_text())
-        for k in ("steps", "dropout", "n_evals", "block_steps", "time_base"):
+        for k in ("steps", "dropout", "weight_decay", "n_evals", "block_steps", "time_base"):
             if getattr(args, k) is not None:
                 cfg[k] = getattr(args, k)
     n_blocks = cfg["steps"] // cfg["block_steps"]
