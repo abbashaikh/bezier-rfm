@@ -33,6 +33,12 @@ def env_worker(conn, env_args, source):
         obs = env.get_observation()
         return np.concatenate([np.asarray(obs[key]).reshape(-1) for key in OBS_KEYS])
 
+    def phases():
+        # Tool Hang milestones from robosuite's own checks: frame grasped, frame assembled, tool grasped, tool hung.
+        gripper = base.robots[0].gripper
+        return np.array([base._check_grasp(gripper, base.frame), base._check_frame_assembled(),
+                         base._check_grasp(gripper, base.tool), base._check_tool_on_frame()])
+
     while True:
         cmd, arg = conn.recv()
         if cmd == "reset":
@@ -51,7 +57,7 @@ def env_worker(conn, env_args, source):
             # After mj_step, site poses describe the qpos before the last integration.
             base.sim.forward()
             pose = read_result(env)
-            conn.send((observe(), bool(base._check_success()), pose["pos"], pose["rot"]))
+            conn.send((observe(), bool(base._check_success()), pose["pos"], pose["rot"], phases()))
         else:
             conn.close()
             return
@@ -84,7 +90,8 @@ def run_group(conns, jobs, policy, batch_size, hold, max_steps, stop_on_success=
         m (int): Segments executed per window.
 
     Returns:
-        list: Per episode: success, first success step, steps, executed actions (S, 7) and achieved grip-site poses (S, 3), (S, 3, 3).
+        list: Per episode: success, first success step, steps, calls, executed actions (S, 7), achieved grip-site poses
+            (S, 3), (S, 3, 3), observations (S + 1, D), Tool Hang phase flags (S, 4) and the steps of the policy calls (calls,).
     """
     eps = []
     for conn, job in zip(conns, jobs):
@@ -92,7 +99,7 @@ def run_group(conns, jobs, policy, batch_size, hold, max_steps, stop_on_success=
     for conn, job in zip(conns, jobs):
         obs, pos, rot = conn.recv()
         eps.append({"job": job, "ex": Executor(pos, rot, job.get("v0"), m=m), "obs": [obs], "queue": [], "done": False,
-                    "ended": False, "hold": 0, "actions": [], "first": None, "calls": 0, "pos": [], "rot": []})
+                    "ended": False, "hold": 0, "actions": [], "first": None, "calls": 0, "pos": [], "rot": [], "phases": [], "call_steps": []})
     while not all(e["done"] for e in eps):
         # The simulator is paused here: the windows are planned before any environment steps again.
         need = [e for e in eps if not e["done"] and not e["ended"] and not e["queue"]]
@@ -112,6 +119,7 @@ def run_group(conns, jobs, policy, batch_size, hold, max_steps, stop_on_success=
                     raise RuntimeError("the window commands do not start at the next step")
                 e["queue"] = list(cmds)
                 e["calls"] += 1
+                e["call_steps"].append(len(e["actions"]))
                 e["ended"] = bool(w.get("last", False))
         active = [e for e in eps if not e["done"]]
         for e in active:
@@ -134,8 +142,9 @@ def run_group(conns, jobs, policy, batch_size, hold, max_steps, stop_on_success=
         for e, conn in zip(eps, conns):
             if e["done"]:
                 continue
-            obs, success, pos, rot = conn.recv()
+            obs, success, pos, rot, ph = conn.recv()
             e["obs"].append(obs)
+            e["phases"].append(ph)
             e["pos"].append(pos)
             e["rot"].append(rot)
             steps = len(e["obs"]) - 1
@@ -146,7 +155,8 @@ def run_group(conns, jobs, policy, batch_size, hold, max_steps, stop_on_success=
                 e["done"] = True
     return [{"demo": e["job"]["demo"], "success": e["first"] is not None, "first_success_step": e["first"],
              "steps": len(e["obs"]) - 1, "calls": e["calls"], "actions": np.array(e["actions"]),
-             "achieved_pos": np.array(e["pos"]), "achieved_rot": np.array(e["rot"])} for e in eps]
+             "achieved_pos": np.array(e["pos"]), "achieved_rot": np.array(e["rot"]), "obs": np.array(e["obs"]),
+             "phases": np.array(e["phases"]), "call_steps": np.array(e["call_steps"])} for e in eps]
 
 
 def rollout(env_args, source, jobs, policy, n_envs=10, batch_size=16, hold=60, max_steps=None, stop_on_success=False,

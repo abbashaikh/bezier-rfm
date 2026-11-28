@@ -1,6 +1,7 @@
 """Place segment durations by equidistribution of a weight over time, with the gripper events as knots."""
 
 import numpy as np
+from scipy.spatial.transform import Rotation
 
 CONTROL_DT = 0.05
 
@@ -26,20 +27,51 @@ def release_weight(actions, events, m=3.0, last=2.0):
     return w
 
 
-def speed_weight(actions, v0=0.02, smooth=5):
-    """Return the weight 1 / (v + v0) of the smoothed commanded speed.
+def lever_length(actions, lengths):
+    """Return the lever length L per action from the gripper state.
+
+    Args:
+        actions (np.ndarray): Absolute actions, shape (N, 7).
+        lengths (tuple): L while empty, then L for each held interval in order (m).
+
+    Returns:
+        np.ndarray: L per action, shape (N,).
+    """
+    # A closed gripper command (> 0) holds an object; held intervals are [start, end).
+    edges = np.diff(np.concatenate([[0], (actions[:, 6] > 0).astype(int), [0]]))
+    L = np.full(len(actions), float(lengths[0]))
+    for j, (s, e) in enumerate(zip(np.flatnonzero(edges == 1), np.flatnonzero(edges == -1))):
+        # Held intervals after the listed ones (regrasps) keep the last listed L.
+        L[s:e] = lengths[1 + min(j, len(lengths) - 2)]
+    return L
+
+
+def speed_weight(actions, v0=0.02, smooth=5, lengths=None):
+    """Return the weight 1 / (v_eff + v0) of the smoothed commanded speed, v_eff = sqrt(v^2 + (L w)^2).
 
     Args:
         actions (np.ndarray): Absolute actions, shape (N, 7).
         v0 (float): Speed offset, m/s.
         smooth (int): Length of the moving-average window, steps.
+        lengths (tuple | None): Lever lengths for lever_length (m); None uses the linear speed only.
 
     Returns:
         np.ndarray: Weight per action, shape (N,).
     """
+    kernel = np.ones(smooth) / smooth
     v = np.linalg.norm(np.gradient(actions[:, :3], CONTROL_DT, axis=0), axis=1)
-    v = np.convolve(np.pad(v, smooth // 2, mode="edge"), np.ones(smooth) / smooth, mode="valid")
-    return 1.0 / (v + v0)
+    v = np.convolve(np.pad(v, smooth // 2, mode="edge"), kernel, mode="valid")
+    if lengths is None:
+        return 1.0 / (v + v0)
+    # Geodesic angular speed on SO(3): central differences inside, one-sided at the ends, as np.gradient.
+    # Relative rotations avoid the false jumps of the rotation vector near pi.
+    rot = Rotation.from_rotvec(actions[:, 3:6])
+    w = np.empty(len(actions))
+    w[1:-1] = (rot[:-2].inv() * rot[2:]).magnitude() / (2 * CONTROL_DT)
+    w[0] = (rot[0].inv() * rot[1]).magnitude() / CONTROL_DT
+    w[-1] = (rot[-2].inv() * rot[-1]).magnitude() / CONTROL_DT
+    w = np.convolve(np.pad(w, smooth // 2, mode="edge"), kernel, mode="valid")
+    return 1.0 / (np.hypot(v, lever_length(actions, lengths) * w) + v0)
 
 
 def allocate(mass, k):

@@ -1,4 +1,5 @@
-"""Fit Tool Hang demos with the H26 knot rules (S: segment clock, E: error-driven insertion), or with S on shifted tick grids (H27)."""
+"""Fit Tool Hang demos with the H26 knot rules (S: segment clock, E: error-driven insertion), with S on shifted tick grids (H27),
+or with S from a rest start (H34)."""
 
 import os
 
@@ -24,7 +25,7 @@ from bezier_rfm.fitting.fit import CONTROL_DT, fit, initialize
 from bezier_rfm.fitting.knots import clock_h, error_knots, euclidean_proxy, grid_tau
 
 
-def rule_h(actions, rule, c, h_min):
+def rule_h(actions, rule, c, h_min, lengths=None):
     """Return the segment durations of one knot rule; E gets the K of S.
 
     Args:
@@ -32,11 +33,12 @@ def rule_h(actions, rule, c, h_min):
         rule (str): "S" or "E".
         c (float): Clock constant of S.
         h_min (float): Shortest segment, s.
+        lengths (tuple | None): Lever lengths of speed_weight (m); None is linear speed only.
 
     Returns:
         np.ndarray: Segment durations h (s), shape (K,).
     """
-    h = clock_h(speed_weight(actions), c, h_min)
+    h = clock_h(speed_weight(actions, lengths=lengths), c, h_min)
     return h if rule == "S" else error_knots(euclidean_proxy(actions), len(h), h_min)
 
 
@@ -44,29 +46,39 @@ def fit_job(job):
     """Fit one demo with one rule (or one S grid) and decode it on the covered actions.
 
     Args:
-        job (tuple): Actions path, demo name, rule, c, h_min, grid offset in ticks (None for the H26 rules).
+        job (tuple): Actions path, demo name, rule, c, h_min, grid offset in ticks (None for the H26 rules),
+            start-pose path (None, or the rest-start file whose actions[0, :6] is the grip-site pose at state 0),
+            lever lengths of S (None for linear speed only).
 
     Returns:
         tuple: Demo name, rule, h (K,), controls, decoded actions (M, 7), diagnostics dict.
     """
-    path, name, rule, c, h_min, offset = job
+    path, name, rule, c, h_min, offset, start_path, lengths = job
     with h5py.File(path, "r") as f:
         actions = f[f"data/{name}/actions"][:]
+    rest = start_path is not None
+    if rest:
+        # Rest start: q_0 = eef[0] at t = 0 and actions[i] at t = 0.05 (i + 1). Row 0 is the pose only; it is never sent.
+        with h5py.File(start_path, "r") as f:
+            start = f[f"data/{name}/actions"][0]
+        actions = np.concatenate([start[None], actions])
     n = len(actions)
     p, r = actions[:, :3], Rotation.from_rotvec(actions[:, 3:6]).as_matrix()
     if offset is None:
-        h, t0 = rule_h(actions, rule, c, h_min), 0.0
+        h, t0 = rule_h(actions, rule, c, h_min, lengths), 0.0
     else:
-        tau = grid_tau(speed_weight(actions), c, offset, h_min)
+        tau = grid_tau(speed_weight(actions, lengths=lengths), c, offset, h_min)
         h, t0 = np.diff(tau), tau[0]
     start = time.perf_counter()
     c0 = initialize(p, r, [], h, (len(h),), t0)
     t = CONTROL_DT * np.arange(n)
     # Fit targets are the commands strictly inside (t0, t_end), in time relative to knot 0.
     first = int(np.floor(t0 / CONTROL_DT + 1e-9)) + 1
-    ctrl, diag = fit(c0, h, t[first:-1] - t0, p[first:-1], r[first:-1], n - first + 1)
+    # With rest, H_0 = q_0, so the fitted spline starts with zero velocity.
+    ctrl, diag = fit(c0, h, t[first:-1] - t0, p[first:-1], r[first:-1], n - first + 1, fix_h0=rest)
     # Decoded on the covered commands, first .. N-1 (for grid offset 0, first = 1 and action 0 is q_0).
-    covered = slice(first - 1 if t0 == 0 else first, n)
+    # With rest, row 0 is eef[0] and is not a command, so the N original actions are rows 1 .. N.
+    covered = slice(first if rest or t0 > 0 else first - 1, n)
     p_hat, r_hat = (np.asarray(a) for a in decode(ctrl, h, t[covered] - t0))
     # The gripper events are not knots, so the stored gripper column is kept unchanged.
     decoded = np.concatenate([p_hat, Rotation.from_matrix(r_hat).as_rotvec(), actions[covered, 6:7]], axis=1)
@@ -78,6 +90,7 @@ def fit_job(job):
         "rot_rms_rad": float(np.sqrt(np.mean(rot_err**2))),
         "t0": float(t0),
         "first_action": covered.start,
+        "rest_start": rest,
     })
     return name, rule, h, ctrl, decoded, diag
 
@@ -99,7 +112,7 @@ def grid_job(job):
             g.create_dataset(key, data=value)
         g.create_dataset("h", data=h)
         g.create_dataset("actions", data=decoded)
-        g.attrs.update({"demo": name, "offset": fit_args[5], "c": fit_args[3], "h_min": fit_args[4],
+        g.attrs.update({"demo": name, "offset": fit_args[5], "c": fit_args[3], "h_min": fit_args[4], "lengths": json.dumps(fit_args[7]),
                         "t0": diag["t0"], "first_action": diag["first_action"], "diagnostics": json.dumps(diag)})
     os.replace(temporary, out)
     return (f"{out.name}: K {len(h)}, t0 {diag['t0']:.3f} s, status {diag['status']}, pos RMS {1000 * diag['pos_rms_m']:.2f} mm, "
@@ -127,7 +140,16 @@ def main():
     parser.add_argument("--tag", default="h26", help="Output files are bezier_<tag>_<rule>.hdf5")
     parser.add_argument("--grids", type=int, default=0, help="S only: fit on this many shifted grids, offsets i / grids")
     parser.add_argument("--out-dir", type=Path, help="With --grids: one file <demo>_g<i>.hdf5 per fit; existing files are skipped")
+    parser.add_argument("--rest-start", type=Path, nargs="?", const=root / "low_dim_abs_q0start.hdf5",
+                        help="S only, grid 0: fit --actions (the raw absolute file) from a rest start; the start pose is actions[0, :6] of this file")
+    parser.add_argument("--lengths", type=float, nargs="+", default=None,
+                        help="S: lever lengths L (m), empty gripper then each held object, e.g. 0.01 0.165 0.10; default: linear speed only")
     args = parser.parse_args()
+    if args.rest_start is not None:
+        if args.grids or args.rules != ["S"]:
+            parser.error("--rest-start needs --rules S and no --grids")
+        if args.actions.resolve() == args.rest_start.resolve():
+            parser.error("--rest-start needs the raw absolute file as --actions, not the start-pose file")
     if args.demos == ["all"]:
         with h5py.File(args.actions, "r") as f:
             # Numeric order; bezier_rfm.datasets.robomimic.demo_keys would import robomimic in every worker.
@@ -136,7 +158,7 @@ def main():
         if args.out_dir is None:
             parser.error("--grids needs --out-dir")
         args.out_dir.mkdir(parents=True, exist_ok=True)
-        jobs = [(args.out_dir / f"{name}_g{i}.hdf5", str(args.actions), name, "S", args.c, args.h_min, i / args.grids)
+        jobs = [(args.out_dir / f"{name}_g{i}.hdf5", str(args.actions), name, "S", args.c, args.h_min, i / args.grids, None, args.lengths)
                 for name in args.demos for i in range(args.grids)]
         jobs = [job for job in jobs if not job[0].exists()]
         print(f"{len(jobs)} fits to run", flush=True)
@@ -149,7 +171,8 @@ def main():
         if out.exists():
             raise FileExistsError(f"{out} exists. Delete it first to write it again")
 
-    jobs = [(str(args.actions), name, rule, args.c, args.h_min, None) for rule in args.rules for name in args.demos]
+    start = None if args.rest_start is None else str(args.rest_start)
+    jobs = [(str(args.actions), name, rule, args.c, args.h_min, None, start, args.lengths) for rule in args.rules for name in args.demos]
     # JAX is not fork-safe once started, so the workers are spawned.
     with get_context("spawn").Pool(args.workers) as pool:
         results = pool.map(fit_job, jobs)
@@ -160,7 +183,8 @@ def main():
         with h5py.File(temporary, "w") as g:
             data = g.create_group("data")
             data.attrs["env_args"] = env_args
-            data.attrs["bezier"] = json.dumps({"rule": rule, "c": args.c, "h_min": args.h_min})
+            data.attrs["bezier"] = json.dumps({"rule": rule, "c": args.c, "h_min": args.h_min, "rest_start": start,
+                                              "lengths": args.lengths})
             for name, r, h, ctrl, decoded, diag in results:
                 if r != rule:
                     continue

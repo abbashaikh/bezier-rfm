@@ -81,7 +81,7 @@ def main():
         rule = json.loads(fs["data"].attrs["bezier"])
         h_s = fs[f"data/{args.demo}/bezier"].attrs["h"]
         # The stored knots must be the ones the rules give for the raw commands.
-        require(np.allclose(h_s, clock_h(speed_weight(raw), rule["c"], rule["h_min"])), "S knots differ from the rule")
+        require(np.allclose(h_s, clock_h(speed_weight(raw, lengths=rule.get("lengths")), rule["c"], rule["h_min"])), "S knots differ from the rule")
         sequences = [("Raw commands (q0-start)", raw),
                      (f"S fit, c = {rule['c']:.2f}, K = {len(h_s)}", fs[f"data/{args.demo}/actions"][:])]
         h_e = None

@@ -29,48 +29,55 @@ def free_indices(k):
     return q, h
 
 
-def split_free(c):
-    """Return the free poses of the controls, without q_0 and q_K.
+def split_free(c, fix_h0=False):
+    """Return the free poses of the controls, without q_0 and q_K (and without H_0 if it is fixed).
 
     Args:
         c (Controls): Knot poses and forward handles.
+        fix_h0 (bool): Whether H_0 is fixed to q_0.
 
     Returns:
-        tuple: Free positions, shape (2K, 3), and rotations, shape (2K, 3, 3).
+        tuple: Free positions, shape (F, 3), and rotations, shape (F, 3, 3); F = 2K, or 2K - 1 if fix_h0.
     """
     k = len(c.q_pos) - 1
     qi, hi = free_indices(k)
     pos, rot = np.zeros((2 * k, 3)), np.zeros((2 * k, 3, 3))
     pos[qi], rot[qi] = np.asarray(c.q_pos)[1:-1], np.asarray(c.q_rot)[1:-1]
     pos[hi], rot[hi] = np.asarray(c.h_pos), np.asarray(c.h_rot)
-    return pos, rot
+    # H_0 is index 0 of the free-pose order.
+    return (pos[1:], rot[1:]) if fix_h0 else (pos, rot)
 
 
-def join_free(free_pos, free_rot, ends_pos, ends_rot):
-    """Insert the fixed q_0 and q_K and return the full controls.
+def join_free(free_pos, free_rot, ends_pos, ends_rot, fix_h0=False):
+    """Insert the fixed q_0 and q_K (and H_0 = q_0 if it is fixed) and return the full controls.
 
     Args:
-        free_pos (jnp.ndarray): Free positions, shape (2K, 3).
-        free_rot (jnp.ndarray): Free rotations, shape (2K, 3, 3).
+        free_pos (jnp.ndarray): Free positions, shape (F, 3).
+        free_rot (jnp.ndarray): Free rotations, shape (F, 3, 3).
         ends_pos (jnp.ndarray): Positions of q_0 and q_K, shape (2, 3).
         ends_rot (jnp.ndarray): Rotations of q_0 and q_K, shape (2, 3, 3).
+        fix_h0 (bool): Whether H_0 is fixed to q_0; then F = 2K - 1, else F = 2K.
 
     Returns:
         Controls: Knot poses and forward handles.
     """
+    if fix_h0:
+        # H_0 = q_0 gives a start velocity of zero.
+        free_pos = jnp.concatenate([ends_pos[:1], free_pos])
+        free_rot = jnp.concatenate([ends_rot[:1], free_rot])
     qi, hi = free_indices(len(free_pos) // 2)
     q_pos = jnp.concatenate([ends_pos[:1], free_pos[qi], ends_pos[1:]])
     q_rot = jnp.concatenate([ends_rot[:1], free_rot[qi], ends_rot[1:]])
     return Controls(q_pos, q_rot, free_pos[hi], free_rot[hi])
 
 
-def _residuals(delta, anchor_pos, anchor_rot, ends_pos, ends_rot, h, t, p, r, scale):
+def _residuals(delta, anchor_pos, anchor_rot, ends_pos, ends_rot, h, t, p, r, scale, fix_h0=False):
     """Return the stacked residuals [p - p_hat, Log(R_hat^T R)] * scale for local chart coordinates.
 
     Args:
-        delta (jnp.ndarray): Chart coordinates, 6 per free pose, shape (12K,).
-        anchor_pos (jnp.ndarray): Chart anchor positions, shape (2K, 3).
-        anchor_rot (jnp.ndarray): Chart anchor rotations, shape (2K, 3, 3).
+        delta (jnp.ndarray): Chart coordinates, 6 per free pose, shape (6F,).
+        anchor_pos (jnp.ndarray): Chart anchor positions, shape (F, 3).
+        anchor_rot (jnp.ndarray): Chart anchor rotations, shape (F, 3, 3).
         ends_pos (jnp.ndarray): Positions of q_0 and q_K, shape (2, 3).
         ends_rot (jnp.ndarray): Rotations of q_0 and q_K, shape (2, 3, 3).
         h (jnp.ndarray): Segment durations in s, shape (K,).
@@ -78,6 +85,7 @@ def _residuals(delta, anchor_pos, anchor_rot, ends_pos, ends_rot, h, t, p, r, sc
         p (jnp.ndarray): Target positions, shape (M, 3).
         r (jnp.ndarray): Target rotations, shape (M, 3, 3).
         scale (float): Residual scale, 1 / sqrt(N).
+        fix_h0 (bool): Whether H_0 is fixed to q_0.
 
     Returns:
         jnp.ndarray: Residuals, shape (6M,).
@@ -85,21 +93,21 @@ def _residuals(delta, anchor_pos, anchor_rot, ends_pos, ends_rot, h, t, p, r, sc
     d = delta.reshape(-1, 6)
     free_pos = anchor_pos + d[:, :3]
     free_rot = anchor_rot @ jax.vmap(so3.exp)(d[:, 3:])
-    c = join_free(free_pos, free_rot, ends_pos, ends_rot)
+    c = join_free(free_pos, free_rot, ends_pos, ends_rot, fix_h0)
     p_hat, r_hat = decode(c, h, t)
     rot = jax.vmap(so3.log)(jnp.swapaxes(r_hat, 1, 2) @ r)
     return scale * jnp.concatenate([p - p_hat, rot], axis=1).ravel()
 
 
-residuals = jax.jit(_residuals)
-jacobian = jax.jit(jax.jacfwd(_residuals))
+residuals = jax.jit(_residuals, static_argnames="fix_h0")
+jacobian = jax.jit(jax.jacfwd(_residuals), static_argnames="fix_h0")
 
 
-def fit(c0, h, t, p, r, n, max_charts=20, rel_tol=1e-12, trf=None):
+def fit(c0, h, t, p, r, n, max_charts=20, rel_tol=1e-12, trf=None, fix_h0=False):
     """Fit the free controls by TRF, re-centering the charts after each local solve.
 
     Args:
-        c0 (Controls): Initial controls; q_0 and q_K stay fixed.
+        c0 (Controls): Initial controls; q_0 and q_K stay fixed (and H_0 = q_0 if fix_h0).
         h (np.ndarray): Segment durations in s, shape (K,).
         t (np.ndarray): Sample times without the two endpoints, shape (M,).
         p (np.ndarray): Target positions, shape (M, 3).
@@ -108,25 +116,26 @@ def fit(c0, h, t, p, r, n, max_charts=20, rel_tol=1e-12, trf=None):
         max_charts (int): Largest number of local solves.
         rel_tol (float): Stop when a solve lowers the cost by less than this fraction.
         trf (dict | None): Overrides of TRF_OPTIONS.
+        fix_h0 (bool): Whether H_0 is fixed to q_0, so the start velocity is zero.
 
     Returns:
         tuple: Fitted Controls (NumPy arrays) and a diagnostics dict.
     """
     ends_pos = np.stack([c0.q_pos[0], c0.q_pos[-1]])
     ends_rot = np.stack([c0.q_rot[0], c0.q_rot[-1]])
-    free_pos, free_rot = split_free(c0)
+    free_pos, free_rot = split_free(c0, fix_h0)
     options = {**TRF_OPTIONS, **(trf or {})}
-    k = len(h)
-    ub = np.tile(np.r_[np.full(3, np.inf), np.full(3, ROT_BOUND)], 2 * k)
+    n_free = len(free_pos)
+    ub = np.tile(np.r_[np.full(3, np.inf), np.full(3, ROT_BOUND)], n_free)
     data = (ends_pos, ends_rot, np.asarray(h, float), t, p, r, 1.0 / np.sqrt(n))
-    cost = 0.5 * float(np.sum(np.asarray(residuals(np.zeros(12 * k), free_pos, free_rot, *data)) ** 2))
+    cost = 0.5 * float(np.sum(np.asarray(residuals(np.zeros(6 * n_free), free_pos, free_rot, *data, fix_h0=fix_h0)) ** 2))
     history = [{"cost": cost}]
     for _ in range(max_charts):
         anchors = (free_pos, free_rot)
         sol = least_squares(
-            lambda x: np.asarray(residuals(x, *anchors, *data)),
-            np.zeros(12 * k),
-            jac=lambda x: np.asarray(jacobian(x, *anchors, *data)),
+            lambda x: np.asarray(residuals(x, *anchors, *data, fix_h0=fix_h0)),
+            np.zeros(6 * n_free),
+            jac=lambda x: np.asarray(jacobian(x, *anchors, *data, fix_h0=fix_h0)),
             bounds=(-ub, ub),
             **options,
         )
@@ -139,7 +148,7 @@ def fit(c0, h, t, p, r, n, max_charts=20, rel_tol=1e-12, trf=None):
         if active == 0 or cost - sol.cost <= rel_tol * cost:
             break
         cost = float(sol.cost)
-    c = Controls(*(np.asarray(a) for a in join_free(free_pos, free_rot, ends_pos, ends_rot)))
+    c = Controls(*(np.asarray(a) for a in join_free(free_pos, free_rot, ends_pos, ends_rot, fix_h0)))
     last = history[-1]
     return c, {"cost": last["cost"], "status": last["status"], "active": last["active"], "charts": len(history) - 1, "history": history}
 

@@ -69,7 +69,7 @@ def fit_demo(actions, ks=None, density=None, variant="event", rule=None):
         if variant == "release":
             w = release_weight(actions, events, rule.get("m", 3.0), rule.get("last", 2.0))
         else:
-            w = speed_weight(actions, rule.get("v0", 0.02))
+            w = speed_weight(actions, rule.get("v0", 0.02), lengths=rule.get("lengths"))
         knot_events = events
         h, fit_ks, cap = place_capped(w, events, sum(event_ks), rule.get("h_min", 0.15))
     start = time.perf_counter()
@@ -121,6 +121,8 @@ def main():
     parser.add_argument("--m", type=float, default=3.0, help="release: weight before a release")
     parser.add_argument("--last", type=float, default=2.0, help="release: weighted window before a release, s")
     parser.add_argument("--v0", type=float, default=0.02, help="speed: speed offset, m/s")
+    parser.add_argument("--lengths", type=float, nargs="+", default=None,
+                        help="speed: lever lengths L (m), empty gripper then each held object; default: linear speed only")
     parser.add_argument("--h-min", type=float, default=0.15, help="release, speed: shortest segment, s")
     parser.add_argument("--demos", nargs="+", default=["all"], help='Demonstration names, or "all"')
     parser.add_argument("--output", type=Path, default=None, help="Default: bezier_k{ks}.hdf5 or bezier_{variant}_rho{density}.hdf5 next to the actions file")
@@ -130,7 +132,7 @@ def main():
         name = f"bezier_k{'_'.join(map(str, args.ks))}" + ("_uniform" if args.variant == "uniform" else "")
     else:
         name = f"bezier_{args.variant}_rho{args.density:g}"
-    rule = {"m": args.m, "last": args.last, "v0": args.v0, "h_min": args.h_min} if args.variant in ("release", "speed") else None
+    rule = {"m": args.m, "last": args.last, "v0": args.v0, "h_min": args.h_min, "lengths": args.lengths} if args.variant in ("release", "speed") else None
     output = args.output or args.actions.with_name(f"{name}.hdf5")
     require(not output.exists(), f"{output} exists. Delete it first to write it again")
 
