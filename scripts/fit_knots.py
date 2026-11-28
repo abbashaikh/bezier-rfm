@@ -175,9 +175,20 @@ def main():
 
     start = None if args.rest_start is None else str(args.rest_start)
     jobs = [(str(args.actions), name, rule, args.c, args.h_min, None, start, args.lengths) for rule in args.rules for name in args.demos]
+    order = {name: i for i, name in enumerate(args.demos)}
+    print(f"{len(jobs)} fits to run", flush=True)
+    t_all = time.perf_counter()
+    results = []
     # JAX is not fork-safe once started, so the workers are spawned; recycling workers returns XLA arenas to the OS.
     with get_context("spawn").Pool(args.workers, maxtasksperchild=4) as pool:
-        results = pool.map(fit_job, jobs)
+        for res in pool.imap_unordered(fit_job, jobs):
+            results.append(res)
+            name, r, h, _, _, diag = res
+            elapsed = time.perf_counter() - t_all
+            print(f"[{len(results)}/{len(jobs)}] {r} {name}: K {len(h)}, status {diag['status']}, "
+                  f"pos RMS {1000 * diag['pos_rms_m']:.2f} mm, rot RMS {1000 * diag['rot_rms_rad']:.2f} mrad "
+                  f"({diag['seconds']:.0f} s, elapsed {elapsed / 60:.1f} min)", flush=True)
+    results.sort(key=lambda res: (args.rules.index(res[1]), order[res[0]]))
     with h5py.File(args.actions, "r") as f:
         env_args = f["data"].attrs["env_args"]
     for rule, out in outputs.items():
@@ -197,8 +208,6 @@ def main():
                     bezier.create_dataset(key, data=value)
                 bezier.attrs["h"] = h
                 bezier.attrs["diagnostics"] = json.dumps(diag)
-                print(f"{rule} {name}: K {len(h)}, status {diag['status']}, pos RMS {1000 * diag['pos_rms_m']:.2f} mm, "
-                      f"rot RMS {1000 * diag['rot_rms_rad']:.2f} mrad ({diag['seconds']:.0f} s)", flush=True)
         os.replace(temporary, out)
         out.chmod(0o400)
         print(f"Wrote {out}")
