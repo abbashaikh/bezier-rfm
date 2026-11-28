@@ -92,6 +92,8 @@ def fit_job(job):
         "first_action": covered.start,
         "rest_start": rest,
     })
+    # Each demo has a distinct (N, K) shape; evict its compiled XLA executables so worker RAM stays flat.
+    jax.clear_caches()
     return name, rule, h, ctrl, decoded, diag
 
 
@@ -162,7 +164,7 @@ def main():
                 for name in args.demos for i in range(args.grids)]
         jobs = [job for job in jobs if not job[0].exists()]
         print(f"{len(jobs)} fits to run", flush=True)
-        with get_context("spawn").Pool(args.workers) as pool:
+        with get_context("spawn").Pool(args.workers, maxtasksperchild=4) as pool:
             for line in pool.imap_unordered(grid_job, jobs):
                 print(line, flush=True)
         return
@@ -173,8 +175,8 @@ def main():
 
     start = None if args.rest_start is None else str(args.rest_start)
     jobs = [(str(args.actions), name, rule, args.c, args.h_min, None, start, args.lengths) for rule in args.rules for name in args.demos]
-    # JAX is not fork-safe once started, so the workers are spawned.
-    with get_context("spawn").Pool(args.workers) as pool:
+    # JAX is not fork-safe once started, so the workers are spawned; recycling workers returns XLA arenas to the OS.
+    with get_context("spawn").Pool(args.workers, maxtasksperchild=4) as pool:
         results = pool.map(fit_job, jobs)
     with h5py.File(args.actions, "r") as f:
         env_args = f["data"].attrs["env_args"]
